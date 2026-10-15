@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 from ps2kit import platform_ as plat
-from ps2kit.config import ROOT
+from ps2kit.config import ROOT, write_atomic
 
 # A made-up serial. SLUS_900.01 is in the range Sony used for samplers and is not a game anyone sells;
 # the point is that `kit extract` derives SLUS-90001 from it and checks it, exactly as it would for a
@@ -496,7 +496,7 @@ def generate(out: Path, force: bool = False) -> dict:
         '# `name [program] 0xaddr [note]`. Its own file, so a real project\'s research/oracle.txt stays clean.\n'
         + ''.join(f'{n} {p} 0x{a:08x}   {note}\n' for n, p, a, note in addresses), encoding='utf-8')
 
-    cfg_path.write_text(f"""\
+    write_atomic(cfg_path, f"""\
 {MARKER}
 # A synthetic PS2 "game": the disc, the program and this config were all assembled by ps2kit/demo.py.
 # Use it by pointing KIT_ROOT at this directory:   KIT_ROOT={_rel(out)} kit extract
@@ -545,7 +545,7 @@ weights        = "{WEIGHTS:#010x}"
 steps          = "{STEPS:#010x}"
 messages       = "{MESSAGES:#010x}"
 overlay_mix    = "{ovl_syms['overlay_mix']:#010x}"
-""", encoding='utf-8')
+""")
 
     return {'dir': out, 'iso': iso_path, 'iso_size': size, 'other': other, 'boot': len(boot_elf),
             'overlay': len(overlay), 'addresses': addresses, 'config': cfg_path}

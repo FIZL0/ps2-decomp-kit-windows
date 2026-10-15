@@ -22,7 +22,7 @@ from ps2kit import emu
 from ps2kit import ghidra as gh
 from ps2kit import platform_ as plat
 from ps2kit.cli import parser
-from ps2kit.config import CONFIG, EXAMPLE, ROOT, cfg, problems
+from ps2kit.config import CONFIG, EXAMPLE, ROOT, cfg, problems, write_atomic
 
 OK, WARN, BAD = '  ok  ', ' note ', ' FIX  '
 
@@ -122,7 +122,7 @@ def main(argv: list[str]) -> int:
         return doctor([])
 
     lines = EXAMPLE.read_text(encoding='utf-8')
-    CONFIG.write_text(lines, encoding='utf-8')
+    write_atomic(CONFIG, lines)
     c = cfg()
     print(f'Wrote {CONFIG.name} from the example. Filling in what I can find.\n')
 

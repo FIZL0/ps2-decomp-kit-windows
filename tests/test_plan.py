@@ -17,7 +17,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import tempfile
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ps2kit import plan  # noqa: E402
 from ps2kit import journal as J  # noqa: E402
 from ps2kit import checks  # noqa: E402
+from ps2kit.config import cfg  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILED: list[str] = []
@@ -179,18 +182,74 @@ def test_shipped_backlog():
     ls = plan.lines(todo)
     ids = [m.group(3) for l in ls if (m := plan.ITEM.match(l))]
     eq(len(ids), len(set(ids)), 'every id in plan/TODO.md is unique')
-    check(25 <= len(ids) <= 60, f'{len(ids)} tasks: a session each, enough to start a port')
+    # The count is about the backlog this kit *ships*: enough to start a port, few enough to read in one
+    # sitting. A port repo running this suite by hand has its own backlog, which shrinks as tasks land and
+    # grows when one is split, so the bound is none of its business. A `[game]` table is what makes a
+    # checkout a port — the Linux edition asks `checks.self_steps`, which this edition has no equivalent
+    # of, so it asks the half of that rule which is about the repo rather than about the test gate.
+    if not cfg(False).raw.get('game'):
+        check(25 <= len(ids) <= 60, f'{len(ids)} tasks: a session each, enough to start a port')
     check(any(l.startswith('### Stretch') for l in ls), 'there is a ### Stretch section')
     check(all(' → ' in l or ' | ' in l for l in ls if plan.ITEM.match(l)),
           'every task line names the files it touches or the test it adds')
     for name in ('DONE.md', 'HUMAN.md', 'REFERENCE.md'):
         check((ROOT / 'plan' / name).exists(), f'plan/{name} exists')
-    # the ids on the line are what `(after X)` and the runner match on
+    # The ids on the line are what `(after X)` and the runner match on — and a *satisfied* dependency is
+    # ticked into DONE.md and gone from TODO.md, which is how `runner.pick` reads it. Asserting the name
+    # is still open would fail the moment a port lands its first dependency, i.e. exactly when the
+    # mechanism is working.
+    done = [m.group(3) for l in plan.lines(ROOT / 'plan/DONE.md') if (m := plan.ITEM.match(l))]
     for l in ls:
         if not plan.ITEM.match(l):
             continue
         if m := re.search(r'\(after (\w+)\)', l):
-            check(m.group(1) in ids, f'(after {m.group(1)}) names a task that exists')
+            check(m.group(1) in ids or m.group(1) in done,
+                  f'(after {m.group(1)}) names a task that exists, open or already done')
+
+
+def test_atomic_write():
+    print('config: a kit.toml write that a concurrent reader cannot catch half-written')
+    from ps2kit.config import write_atomic
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / 'kit.toml'
+        write_atomic(p, '[game]\niso = "a.iso"\n')
+        eq(p.read_text(encoding='utf-8'), '[game]\niso = "a.iso"\n', 'a file that was not there is written')
+        if os.name == 'posix':   # on Windows chmod only toggles read-only, so there is no mode to keep
+            os.chmod(p, 0o644)
+        write_atomic(p, '[game]\niso = "b.iso"\n')
+        eq(p.read_text(encoding='utf-8'), '[game]\niso = "b.iso"\n', 'and replaced whole the next time')
+        if os.name == 'posix':
+            eq(oct(p.stat().st_mode & 0o777), '0o644', "with the mode it had, not the temp file's 0600")
+        eq([f.name for f in Path(tmp).iterdir()], ['kit.toml'], 'and no temp file left behind')
+
+        # The reason any of this is here: a run is several processes deep in one repo, and the old
+        # truncate-then-write let `./kit check` read an empty [game] and blame the disc — "[game] iso is
+        # empty", pointing at the ISO rather than at whoever was saving a symbol. Two details decide
+        # whether this exercise can see that at all, and both are deliberate: the file is as big as a real
+        # kit.toml (a two-line one is written too fast for a reader to catch), and the readers run until
+        # the writes are done rather than a fixed number of times. Against the writer this replaced the
+        # same loop gives ~1100 bad reads out of a few thousand, most of them that exact empty iso.
+        body = ''.join(f'sym_{i:04d} = "0x{i:06x}"\n' for i in range(1500))   # ~22 KB, openmx's size
+        bad: list[str] = []
+        done = threading.Event()
+
+        def reader() -> None:
+            while not done.is_set():
+                try:
+                    if not tomllib.loads(p.read_text(encoding='utf-8')).get('game', {}).get('iso'):
+                        bad.append('[game] iso read back empty')
+                except Exception as e:      # noqa: BLE001 — any failure at all is the bug
+                    bad.append(type(e).__name__)
+
+        threads = [threading.Thread(target=reader) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for i in range(300):
+            write_atomic(p, f'[game]\niso = "{i}.iso"\n[symbols]\n{body}')
+        done.set()
+        for t in threads:
+            t.join()
+        eq(sorted(set(bad)), [], f'{len(bad)} reads during 300 writes saw a file that was not whole')
 
 
 # --- the journal --------------------------------------------------------------
@@ -457,7 +516,8 @@ def test_cli_help():
 
 def main() -> int:
     for t in (test_plan_roundtrip, test_plan_index_and_sections, test_brief, test_shipped_backlog,
-              test_journal, test_check_summary, test_audit, test_guard, test_inbox, test_runner_picking,
+              test_atomic_write, test_journal, test_check_summary, test_audit, test_guard, test_inbox,
+              test_runner_picking,
               test_runner_union, test_stop_hook_never_crashes, test_cli_help):
         t()
     print()

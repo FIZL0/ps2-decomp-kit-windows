@@ -39,7 +39,7 @@ import sys
 import time
 from pathlib import Path
 
-from ps2kit.config import cfg, ROOT
+from ps2kit.config import cfg, ROOT, write_atomic
 
 TTL = 5.0  # seconds a parsed file is trusted before its mtime is checked again
 _cache: dict[str, tuple[float, int, list[str]]] = {}  # path -> (checked_at, mtime_ns, lines)
@@ -134,7 +134,7 @@ def _find(ls: list[str], tid: str) -> int:
 # --- writing ------------------------------------------------------------------
 
 def _write(path, ls: list[str]) -> None:
-    """Atomic, and a no-op when nothing changed: temp file in the same dir, then os.replace."""
+    """Atomic (see `config.write_atomic`), and a no-op when nothing changed."""
     path = str(path)
     text = '\n'.join(ls).rstrip('\n') + '\n'
     try:
@@ -142,10 +142,7 @@ def _write(path, ls: list[str]) -> None:
             return
     except OSError:
         pass
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(text)
-    os.replace(tmp, path)
+    write_atomic(path, text)
     _cache.pop(path, None)
 
 

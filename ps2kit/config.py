@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,44 @@ def _config_path() -> Path:
 
 CONFIG = _config_path()
 EXAMPLE = ROOT / 'kit.toml.example'
+
+
+def write_atomic(path, text: str) -> None:
+    """Replace a text file in one step: a temp file beside it, then `os.replace`.
+
+    Every writer of `kit.toml` goes through this, because a run is several processes deep in the same
+    repository and a plain truncate-then-write has a window in which the file is empty or half a file.
+    A `./kit check` that reads it in that window does not fail with "somebody is editing kit.toml" — it
+    fails with `[game] iso is empty`, which points at the disc, and costs an hour.
+
+    `os.replace` is atomic within a filesystem, so a reader sees either the old file or the new one. The
+    temp name carries the pid so two writers cannot land on the same one, and the mode of the file being
+    replaced is kept (a fresh temp file is 0600, and `kit.toml` is not a secret).
+
+    Where this edition differs from the Linux one: on Windows a file another process has open cannot be
+    replaced, so the race does not go away, it changes ends — the reader sees a whole file and the *writer*
+    gets a sharing violation. A reader of `kit.toml` holds it open for microseconds, so a short bounded
+    retry covers it; failing after that is correct, because something is holding the file for a living and
+    silently not writing would be worse than saying so.
+    """
+    path = Path(path)
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    try:
+        tmp.write_text(text, encoding='utf-8')
+        try:
+            os.chmod(tmp, path.stat().st_mode & 0o7777)
+        except OSError:
+            pass  # no file there yet: the umask's default is right
+        for attempt in range(1, 11):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:      # Windows: somebody has it open; they are about to close it
+                if attempt == 10:
+                    raise
+                time.sleep(0.02)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def num(v, what='value'):
@@ -289,7 +328,7 @@ class Config:
                 keep = lines[hit].split('#', 1)
                 comment = f'  #{keep[1]}' if len(keep) > 1 else ''
                 lines[hit] = f'{key} = {lit}{comment}'
-        self.path.write_text('\n'.join(lines).rstrip('\n') + '\n', encoding='utf-8')
+        write_atomic(self.path, '\n'.join(lines).rstrip('\n') + '\n')
         _cache.clear()
 
 
