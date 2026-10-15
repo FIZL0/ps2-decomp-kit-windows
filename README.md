@@ -58,9 +58,9 @@ calculation is *nearly* right, and nearly right compounds into visibly wrong wit
 
 **Workflow.** A task list that is a tool rather than a file to read (`kit plan next`, `brief`, `tick`,
 `block`), a research journal with a mandatory "what I could not verify" section, a test runner that
-answers "did the build break or did a test fail" in one line, a one-call wrap-up that tests, ticks and
-commits, and unattended runners that keep several agents working through the backlog in separate
-worktrees.
+answers "did the build break or did a test fail" in one line, a one-call wrap-up that tests, audits for
+leaked addresses, ticks and commits, and unattended runners that keep several agents working through the
+backlog in separate worktrees.
 
 **Context discipline.** If an AI agent is doing the work, its whole conversation is re-read every turn, so
 a single careless `cat` of a decompilation dump can end a session. The kit ships hooks that block the

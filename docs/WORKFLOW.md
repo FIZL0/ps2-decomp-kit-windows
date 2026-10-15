@@ -140,6 +140,11 @@ kit done T12 "port the walk speed ramp"
 `done` runs the tests, ticks the task, and commits. If the tests fail it refuses, and says whether the
 build broke or a test failed.
 
+It also runs `kit audit` before it commits: every file about to go in is checked for the addresses in
+your address file and for Ghidra's `FUN_…`/`DAT_…` placeholder names. Those belong in `research/` and in
+journal entries, not in the port — and a rule like that only holds if something checks it. If a hit is
+deliberate, `--skip-audit` and say why in the journal.
+
 Report: what you did, how it is proved, what you did not verify. Then stop. The next task is a new
 sitting with fresh context, and that is deliberate.
 

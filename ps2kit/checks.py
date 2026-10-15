@@ -13,8 +13,14 @@ and an agent that cannot tell them apart will happily "fix" a passing port to sa
 call because three calls means three chances to commit work that does not build, and because the tick and the
 commit belong to the same decision. On failure it changes nothing at all.
 
+`kit audit` is the third, and it is a gate inside `kit done` rather than something you remember to
+run: it greps every committed file for the addresses in `research/oracle.txt` and for Ghidra's
+placeholder names, because "no retail address in the port" is a rule that needs a check. A rule without
+one survives exactly as long as nobody is in a hurry.
+
     kit check [extra args passed to the test command]
-    kit done <ID> "<commit message>" [--blocked "<why + what unblocks it>"]
+    kit done <ID> "<commit message>" [--blocked "<why + what unblocks it>"] [--skip-audit]
+    kit audit
 
 Both honour a concurrency gate and a build-directory size cap; see `_slot` and `_cap_build_dirs`.
 """
@@ -250,6 +256,111 @@ def cmd_check(argv: list[str]) -> int:
     return 0 if rc == 0 else 1
 
 
+# --- kit audit ---------------------------------------------------------------
+
+# Ghidra's placeholder names, the shapes it generates for unnamed things.
+DECOMP_NAME = re.compile(r'\b(?:FUN|DAT|SUB|LAB|UNK|OFF)_[0-9a-fA-F]{6,8}\b')
+# Where a port's source might plausibly live. The audit reads text, so this keeps it off binaries.
+CODE_SUFFIX = {'.rs', '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.py', '.go', '.java', '.kt', '.ts',
+               '.js', '.zig', '.swift', '.lua', '.nim', '.odin', '.d', '.m', '.mm'}
+# The kit's own modules, its Ghidra scripts and its tests *parse* dumps whose format is literally
+# `FUN_…` lines, so a placeholder name there is subject matter, not a leak.
+TOOL_DIRS = ('ps2kit/', 'tests/', 'ghidra_scripts/')
+
+
+def _address_re(addrs: list[int]) -> re.Pattern | None:
+    """One pattern matching any of these addresses however it is spelled: `0x0035bc50`, `35bc50`,
+    `0X35BC50`. The lookarounds stop `0x1004c00` from counting as a hit on `0x1004c0`."""
+    if not addrs:
+        return None
+    alts = '|'.join(sorted({f'{a:x}' for a in addrs}, key=len, reverse=True))
+    return re.compile(r'(?<![0-9a-zA-Z_])(?:0x)?0*(' + alts + r')(?![0-9a-zA-Z_])', re.I)
+
+
+def audit(root: Path, files: list[str], known: dict[int, str]) -> list[str]:
+    """`path:line: what` for every leak of a retail address or a decompiler-generated name into the
+    files that get committed. Addresses come from the project's own address file, which is the only
+    place that knows which numbers are real: an address nobody wrote down cannot be recognised, and
+    guessing from the shape of a hex literal would flag every bitmask in the port.
+
+    Addresses are looked for everywhere except the research notes and the journal, because that is
+    exactly the rule — they belong there and nowhere else. Placeholder names are looked for in source
+    files only, since prose that explains what to do about a `FUN_…` has to be able to name one."""
+    hits, addr_re = [], _address_re(list(known))
+    for rel in files:
+        if rel.startswith('research/') or rel.startswith('context/'):
+            continue
+        p = root / rel
+        try:
+            text = p.read_text(errors='strict')
+        except (OSError, UnicodeDecodeError):
+            continue                        # binary, a symlink to nowhere, gone since `git ls-files`
+        code = p.suffix.lower() in CODE_SUFFIX and not rel.startswith(TOOL_DIRS)
+        for n, line in enumerate(text.splitlines(), 1):
+            if addr_re:
+                for m in addr_re.finditer(line):
+                    a = int(m.group(1), 16)
+                    hits.append(f'{rel}:{n}: {m.group(0)} is {known[a]} ({a:#010x})')
+            if code:
+                for m in DECOMP_NAME.finditer(line):
+                    hits.append(f'{rel}:{n}: {m.group(0)} is a decompiler placeholder name')
+    return hits
+
+
+def _known_addresses() -> dict[int, str]:
+    """Every address this project has written down: the address file, then `kit.toml`'s `[symbols]`."""
+    from ps2kit import oracle
+    c = cfg(False)
+    known = {}
+    try:
+        for name, program, addr, _note in oracle.entries():
+            known.setdefault(addr, f'{name} ({program})' if program else name)
+    except SystemExit:
+        pass                                # no address file yet: then there is nothing to leak
+    for name, addr in c.symbols.items():
+        known.setdefault(addr, name)
+    return known
+
+
+def _tracked(cwd: Path) -> list[str]:
+    """Everything that is committed or about to be: `kit done` audits *before* it stages, so a brand
+    new file — the likeliest place for a fresh leak — has to be in this list."""
+    out = []
+    for args in (['git', 'ls-files'], ['git', 'ls-files', '--others', '--exclude-standard']):
+        r = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)
+        out += [l for l in r.stdout.splitlines() if l]
+    return out
+
+
+def run_audit(cwd: Path, quiet: bool = False) -> list[str]:
+    """The audit, printed the way `check` prints: one line when it is clean."""
+    known = _known_addresses()
+    hits = audit(cwd, _tracked(cwd), known)
+    if not hits:
+        if not quiet:
+            n = len(known)
+            print(f'AUDIT ok    no retail address ({n} written down) and no decompiler name outside '
+                  f'research/')
+        return hits
+    print(f'AUDIT FAILED  {len(hits)} leak(s) into committed files:', file=sys.stderr)
+    for h in hits[:MAX_LINES]:
+        print(f'  {h}', file=sys.stderr)
+    if len(hits) > MAX_LINES:
+        print(f'  … and {len(hits) - MAX_LINES} more', file=sys.stderr)
+    print('\nAddresses belong in research/oracle.txt and journal entries; in the port, say what the\n'
+          'function does instead. Rename the placeholders to what they are.', file=sys.stderr)
+    return hits
+
+
+def cmd_audit(argv: list[str]) -> int:
+    from ps2kit.cli import parser
+    ap = parser('audit', 'Check that no retail address or decompiler name reached a committed file.')
+    ap.add_argument('--quiet', action='store_true', help='print nothing when it is clean')
+    a = ap.parse_args(argv)
+    cwd = Path.cwd() if (Path.cwd() / '.git').exists() else ROOT
+    return 1 if run_audit(cwd, a.quiet) else 0
+
+
 # --- kit done ----------------------------------------------------------------
 
 def cmd_done(argv: list[str]) -> int:
@@ -259,6 +370,8 @@ def cmd_done(argv: list[str]) -> int:
     ap.add_argument('message', metavar='MSG', help='the commit message')
     ap.add_argument('--blocked', metavar='WHY',
                     help='mark the task [~] instead of done: why, and what would unblock it')
+    ap.add_argument('--skip-audit', action='store_true',
+                    help='commit even though the address audit found something (say why in the journal)')
     a = ap.parse_args(argv)
 
     from ps2kit import plan  # function-local by design: plan.py is a leaf, so no import cycle
@@ -289,6 +402,11 @@ def cmd_done(argv: list[str]) -> int:
             lock.release()
     else:
         print('! no [build] test in kit.toml: committing without a test gate', file=sys.stderr)
+
+    if run_audit(cwd) and not a.skip_audit:
+        print('\nNothing ticked, nothing committed. Move those into research/oracle.txt or the journal,\n'
+              f'or, if this one is deliberate, kit done {a.id} "<msg>" --skip-audit', file=sys.stderr)
+        return 1
 
     if a.blocked:
         plan.block(a.id, a.blocked)

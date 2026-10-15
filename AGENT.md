@@ -16,7 +16,8 @@ differently underneath (`WINDOWS.md`). Work in PowerShell 7 — these pages' exa
 - **No retail addresses or decompiler-generated names in shipped code.** No `FUN_00123456`, no
   `DAT_00456789`, no bare hex addresses in the port. Describe the behaviour instead: a comment saying
   *what* a function does is worth more than one saying where it lived. Addresses belong in
-  `research/oracle.txt` and in journal entries — research notes, not product.
+  `research/oracle.txt` and in journal entries — research notes, not product. `kit audit` checks this
+  and `kit done` gates on it, so you find out before the commit rather than after the release.
 - **Match the original exactly, where it matters.** Simulation behaviour — physics, AI, state machines,
   scoring, timing — is ported, not approximated, and proved against the original. No placeholders, no
   "close enough", no TODO left behind as if it were finished work.

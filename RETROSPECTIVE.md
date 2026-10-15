@@ -116,6 +116,29 @@ The same was true of OS assumptions — socket paths, process checks, screenshot
 primitives — which is now rule 2 and one module. That is what makes the Windows edition a change to one
 file rather than a fork.
 
+### The examples carried the old game with them
+
+The generalisation moved every address *the code uses* into `kit.toml`, and I checked that. What I did
+not check for a long time was the addresses the **prose** uses. The first draft of this kit shipped seven
+real function addresses from the project it grew out of, in thirty-odd places: `README.md`, seven
+documentation pages, seven module docstrings, a Rust doc comment, two Ghidra scripts, the example config,
+a watch spec and a test. Every one of them was an innocent-looking example argument — `kit fn <that
+address>` — and that game's own disc directory name was in a fixture besides. The kit's own first
+non-negotiable rule says no retail address appears in what it ships, and the kit broke it on line 15 of
+its own README.
+
+Finding them was mechanical once I thought of it: take every hex literal in the new repository, take the
+old project's address file, intersect. Seven hits, five minutes. Not thinking of it lasted much longer.
+
+The lesson is not "be careful with examples". It is that a rule nobody can check is a rule that holds
+until the first hurry, and that the cheapest place to put the check is where the work ends. So the kit now
+has `kit audit`, and `kit done` gates on it: every file about to be committed is grepped for the
+addresses in the project's own address file and for Ghidra's `FUN_…`/`DAT_…` names. It only recognises
+addresses the project wrote down — guessing which hex literals are addresses would flag every bitmask —
+which means an address you never named can still slip through, and the example addresses in these docs are
+now in the demo program's own range, where nothing real can live. Both of those are exactly the kind of
+gap this file exists to say out loud.
+
 ### Per-game setup was a week of undocumented archaeology
 
 Two things in particular: finding the frame counter, and working out which blobs on the disc are

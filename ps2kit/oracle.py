@@ -43,7 +43,7 @@ def entries() -> list[tuple[str, str, int, str]]:
     their addresses, so an address with no program beside it is not an address. A note is either the
     rest of the line or the comment above it.
     """
-    path = cfg().oracle_file
+    path = cfg(False).oracle_file   # the addresses file stands on its own: readable before kit.toml exists
     if not path.exists():
         return []
     out, note = [], ''

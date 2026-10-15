@@ -5,7 +5,7 @@ Grouped the way the work actually goes:
   set up        setup · doctor · demo · sym
   get the code  extract · elf · ghidra · fn · xref · dis · data
   watch it run  pcsx2 · pine · pad · shot · probe · record · state
-  prove it      oracle · check
+  prove it      oracle · check · audit
   keep going    plan · journal · done · run
 
 Design rule: every command prints something short and useful on success and one actionable line on
@@ -43,6 +43,7 @@ CMDS = {
 
     'oracle':  ('ps2kit.oracle', 'cmd_oracle', 'run one original function on chosen inputs (no emulator)'),
     'check':   ('ps2kit.checks', 'cmd_check', 'run the port\'s tests, summarised to a few lines'),
+    'audit':   ('ps2kit.checks', 'cmd_audit', 'check no retail address or decompiler name got committed'),
 
     'plan':    ('ps2kit.plan', 'main', 'the task list: next, brief, tick, block, add, move…'),
     'journal': ('ps2kit.journal', 'cmd_journal', 'start or finish a journal entry for a task'),
@@ -58,7 +59,7 @@ def usage() -> str:
     groups = [('set up', ['setup', 'doctor', 'demo', 'sym']),
               ('get the code', ['extract', 'elf', 'ghidra', 'fn', 'xref', 'dis', 'data']),
               ('watch it run', ['pcsx2', 'pine', 'pad', 'shot', 'probe', 'record', 'state']),
-              ('prove it', ['oracle', 'check']),
+              ('prove it', ['oracle', 'check', 'audit']),
               ('keep going', ['plan', 'journal', 'done', 'run'])]
     out = ['ps2-decomp-kit — decompile and re-implement a PlayStation 2 game, with proof.', '',
            'usage: kit <command> [args]    ·    kit <command> --help', '']

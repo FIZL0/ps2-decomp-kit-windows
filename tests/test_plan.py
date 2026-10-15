@@ -256,6 +256,46 @@ def test_check_summary():
         has('\n'.join(out), r'full log: ', 'and points at the full copy on disk')
 
 
+def test_audit():
+    print('checks: the address audit, which is the only thing enforcing "no retail address in the port"')
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        known = {0x0035bc50: 'walk_ramp (gameplay)', 0x1f4a20: 'frame'}
+        files = {
+            'crates/sim/src/walk.rs': 'let t = ramp(0x0035bc50);\n',          # the leak that matters
+            'crates/sim/src/turn.rs': 'FUN_0012abcd(x);  // and a placeholder name\n',
+            'crates/sim/src/ok.rs':   'let mask = 0x3f800000;  // 1.0f\n',     # a constant, not an address
+            'docs/NOTES.md':          'the walker is at 35bc50\n',            # prose counts too
+            'ps2kit/decomp.py':       "HEADER = re.compile('FUN_([0-9a-f]+)')\n",  # the dump's own format
+            'research/oracle.txt':    'walk_ramp gameplay 0x0035bc50\n',      # where it belongs
+            'research/journal/2026-10-15-t1-walk/README.md': 'ported 0x0035bc50\n',
+        }
+        for rel, text in files.items():
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text, encoding='utf-8')
+        hits = checks.audit(root, list(files), known)
+        where = {h.split(':')[0] for h in hits}
+        eq(sorted(where), ['crates/sim/src/turn.rs', 'crates/sim/src/walk.rs', 'docs/NOTES.md'],
+           'an address or a placeholder name is flagged wherever it is committed, prose included')
+        check(not [h for h in hits if 'research/' in h],
+              'research notes and the journal are where addresses are *supposed* to live')
+        check(not [h for h in hits if 'ok.rs' in h], 'a float bit pattern is not an address')
+        check(not [h for h in hits if 'ps2kit/' in h],
+              "the kit's own modules parse FUN_ names for a living")
+        has('\n'.join(hits), r'walk\.rs:1: 0x0035bc50 is walk_ramp', 'a hit says what the address is')
+        has('\n'.join(hits), r'NOTES\.md:1: 35bc50 is walk_ramp', 'however it was spelled')
+
+        bare = checks.audit(root, list(files), {})
+        eq([h.split(':')[0] for h in bare], ['crates/sim/src/turn.rs'],
+           'with nothing written down no address can be recognised, and nothing is guessed from a hex '
+           'literal — only the placeholder name, whose shape is unmistakable, is still caught')
+
+        (root / 'crates/sim/src/near.rs').write_text('let x = 0x0035bc500;\n', encoding='utf-8')
+        eq(checks.audit(root, ['crates/sim/src/near.rs'], known), [],
+           'a longer literal that merely starts with an address is not a hit')
+
+
 # --- the hooks ----------------------------------------------------------------
 
 def hook(payload, *args):
@@ -353,7 +393,7 @@ def test_cli_help():
 
 def main() -> int:
     for t in (test_plan_roundtrip, test_plan_index_and_sections, test_brief, test_shipped_backlog,
-              test_journal, test_check_summary, test_guard, test_inbox, test_runner_picking,
+              test_journal, test_check_summary, test_audit, test_guard, test_inbox, test_runner_picking,
               test_stop_hook_never_crashes, test_cli_help):
         t()
     print()
