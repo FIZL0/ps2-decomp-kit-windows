@@ -137,8 +137,12 @@ kit journal new T12 walk-ramp   # directory + stubs with the required sections
 kit done T12 "port the walk speed ramp"
 ```
 
-`done` runs the tests, ticks the task, and commits. If the tests fail it refuses, and says whether the
-build broke or a test failed.
+`done` runs the tests, ticks the task, commits, and pushes the branch it committed on when that branch
+is a task's own — your `task/<ID>` in a worktree, a topic branch here. The **shared** branch it leaves
+alone, and says so with the one-line `git push` to run when you want that merge to be everyone's. If the
+tests fail it refuses, and says whether the build broke or a test failed. A push that cannot be made is
+one line of output and nothing worse: the commit is already safe here, and the next wrap-up pushes it.
+`[git] push = false` turns it off.
 
 It also runs `kit audit` before it commits: every file about to go in is checked for the addresses in
 your address file and for Ghidra's `FUN_…`/`DAT_…` placeholder names. Those belong in `research/` and in
@@ -167,6 +171,12 @@ What to expect from a long run:
   working run, just a slower one.
 - Each agent works on `task/<ID>` in its own worktree, with its own build directory, so three can run
   tests at once. Merge them afterwards; conflicts are rare if tasks were picked for different files.
+- No merge is pushed: a run moves work onto the shared branch locally and stops there, because whether
+  that becomes the project's public history is yours to decide when you read it. What the run does push
+  is the branch of any task whose merge it had to leave for a human — that branch is the one copy of
+  that work, and losing it costs a whole session. A merged `task/<ID>` is dropped from the remote only
+  once the remote holds the merge, so `git ls-remote --heads origin` is the list of work the shared
+  branch has not published yet, never a list with something missing from it.
 - Expect roughly one blocked task in five. Blocked is a result, not a failure — the reason is recorded
   and the next session can pick it up.
 - Build directories grow fast. A Rust workspace per worktree can reach tens of gigabytes; `kit check`

@@ -50,12 +50,14 @@ lint = ""
 build_error = "^error(\\[E[0-9]+\\])?:|: error:"
 
 [git]
-# Where finished work goes, so it never sits on one disk: `./kit done` pushes the branch it just
-# committed on (an agent's task/<ID> in its worktree, main in the main checkout) and `./kit run`
-# pushes the merge target after each merge, dropping the merged task branch from the remote. When
-# the remote has moved it is merged in first, never rebased — the run's worktree branches are based
-# on these commits. A push that fails is logged and nothing more: the commit is already safe here.
-# `false` turns it off; a string names a remote other than origin.
+# Where finished work goes, so it never sits on one disk: `kit done` pushes the branch it just
+# committed on — but only a task's own branch (an agent's task/<ID>, a topic branch), never the
+# shared one. Publishing the branch everyone reads stays yours to do: a wrap-up in the main checkout
+# prints the `git push` and leaves it. A `kit run` pushes the branch of any task whose merge it
+# left for a human, and drops a merged task/<ID> from the remote once the remote holds the merge.
+# When the remote has moved it is merged in first, never rebased — the run's worktree branches are
+# based on these commits. A push that fails is logged and nothing more: the commit is already safe
+# here. `false` turns it off; a string names a remote other than origin.
 push = "origin"
 
 

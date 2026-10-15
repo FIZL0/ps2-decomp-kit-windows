@@ -80,11 +80,14 @@ committed on. One call, so a wrap-up cannot be half-done — the state where the
 task is still open is the one that confuses the next session most, and the state where it is committed but
 only on this disk is the one that loses work outright.
 
-Pushing is nobody's manual step: `kit done` pushes the branch you are on (an agent's `task/<ID>` from
-its worktree, `main` from the main checkout), and `kit run` pushes the merge target after every merge and
-drops the merged `task/<ID>` from the remote. A remote that has moved is merged in first, never rebased,
-because the run's worktree branches are based on those commits. A push that fails is a logged line and
-nothing more. Turn it off with `[git] push = false`.
+Pushing your own branch is nobody's manual step: `kit done` pushes the branch you are on when it is a
+task's own (an agent's `task/<ID>` from its worktree, a topic branch here), and a `kit run` pushes the
+branch of any task whose merge it had to leave for a human. Publishing the **shared** branch stays a
+decision somebody makes: neither a wrap-up nor a run pushes it, and a wrap-up in the main checkout prints
+the one-line `git push` instead. A merged `task/<ID>` is dropped from the remote, but only once the remote
+actually holds the merge — before that, the branch is the only copy of that work the remote has. A remote
+that has moved is merged in first, never rebased, because the run's worktree branches are based on those
+commits. A push that fails is a logged line and nothing more. Turn it off with `[git] push = false`.
 
 ## Code map
 
