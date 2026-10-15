@@ -60,12 +60,18 @@ def commit(d: Path, text: str, msg: str) -> None:
 
 def test_push() -> None:
     print('push: the step at the end of done and of every merge')
+    real_root = checks.ROOT
     with tempfile.TemporaryDirectory() as tmp:
         bare = Path(tmp) / 'origin.git'
         sp.run(['git', 'init', '-q', '--bare', '-b', 'main', str(bare)])
         a = repo(tmp, 'a')
         g('remote', 'add', 'origin', str(bare), cwd=a)
         remote_as('origin')
+        # `a` stands in for the main checkout as well as for the caller, because one of the two things
+        # that make a branch shared is "what the main checkout has out". Left unpinned, every check here
+        # would quietly depend on the branch the *kit's own* checkout happens to be on today — which is
+        # how this suite passed on a fix branch and failed the moment main was checked out again.
+        checks.ROOT = a
 
         # The branch everyone reads is never pushed from here, however it is spelled: this repo has no
         # remote HEAD (it was init-ed, not cloned), so the fallback names have to carry it.
@@ -88,25 +94,22 @@ def test_push() -> None:
         # it is called, and an agent in a worktree has to recognise it from over there.
         root = repo(tmp, 'root-checkout')
         g('checkout', '-q', '-b', 'dev', cwd=root)
-        real_root, checks.ROOT = checks.ROOT, root
+        checks.ROOT = root
         try:
             check(checks.shared_branch(a, 'origin', 'dev'),
                   'seen from a worktree, the main checkout\'s branch is shared whatever it is called')
             check(checks.push(a, 'dev') == '', 'so a wrap-up on it pushes nothing')
         finally:
-            checks.ROOT = real_root
+            checks.ROOT = a
 
-        # …and that second rule stops at the main checkout's own door: there, the branch you have out is
-        # the branch you are working on, so a human on a topic branch is on their own branch.
+        # …and that second rule stops at the main checkout's own door: there (cwd is ROOT, as pinned
+        # above) the branch you have out is the branch you are working on, so a human on a topic branch
+        # is on their own branch.
         g('checkout', '-q', '-b', 'dev', cwd=a)
-        real_root, checks.ROOT = checks.ROOT, a
-        try:
-            check(not checks.shared_branch(a, 'origin', 'dev'),
-                  'in the main checkout, a topic branch is yours and not the merge target')
-            check(checks.push(a, 'dev') == 'pushed dev → origin', 'and it pushes')
-            check(checks.shared_branch(a, 'origin', 'main'), 'while main is still shared there')
-        finally:
-            checks.ROOT = real_root
+        check(not checks.shared_branch(a, 'origin', 'dev'),
+              'in the main checkout, a topic branch is yours and not the merge target')
+        check(checks.push(a, 'dev') == 'pushed dev → origin', 'and it pushes')
+        check(checks.shared_branch(a, 'origin', 'main'), 'while main is still shared there')
         g('checkout', '-q', 'main', cwd=a)
         g('push', '-q', 'origin', '--delete', 'dev', cwd=a)
 
@@ -171,6 +174,7 @@ def test_push() -> None:
         remote_as(None)
         check(checks.push(a, 'task/T9') == '', '[git] push = false says nothing')
         check(checks.drop_if_merged(a, 'task/T9') == '', 'and drops nothing either')
+    checks.ROOT = real_root
 
 
 if __name__ == '__main__':
