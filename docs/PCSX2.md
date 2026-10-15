@@ -102,6 +102,13 @@ On Windows this is an Xbox 360 pad through the **ViGEmBus** driver, driven by th
 SDL — and therefore PCSX2 — applies its standard mapping with no configuration. `kit pad check` names
 whichever piece is missing, the driver or the package.
 
+**A pad PCSX2 does not read passes every other check.** The device exists, `kit pad send` reports
+success, and the game receives nothing — because controller *port 1* in that emulator's ini is bound to
+something else (commonly the keyboard, if that is how you play, which `kit pcsx2 copy` then switches
+off). `kit pad check` reads the ini and says which input sources port 1 is bound to, and `kit pcsx2 copy
+N` binds port 1 to copy N's pad. It never touches your own config: bind port 1 there yourself, in
+Settings -> Controllers.
+
 `pad serve` holds the device open: the pad disappears when that process exits, so it needs a window or a
 Windows Terminal tab of its own — PowerShell has no `&`. `send` reaches the server over a named pipe, so
 a `send` from any window finds it, and `KIT_PCSX2` picks copy *N*'s server.

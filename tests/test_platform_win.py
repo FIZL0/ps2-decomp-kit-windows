@@ -160,8 +160,21 @@ def test_pad_ini_rows():
            'the same keys are written whichever copy it is')
         eq({(s, k): v for s, k, v in plat.pad_ini_rows(1)}[('Hotkeys', 'TogglePause')], 'SDL-0/Guide',
            'copy 1 is device index 0')
+        # Controller port 1 itself, which is what the game actually reads: a copy that keeps the user's
+        # keyboard-bound port 1 has no input at all, since the keyboard source is switched off above.
+        eq(d[('Pad1', 'Cross')], 'SDL-1/A', "copy 2's port 1 is its own pad, not the user's binding")
+        eq(d[('Pad1', 'Start')], 'SDL-1/Start', 'the press every capture task starts with')
+        eq(d[('Pad1', 'Type')], 'DualShock2', 'a port whose type is None receives nothing either')
+        eq(d[('Pad1', 'L2')], 'SDL-1/+LeftTrigger', 'the triggers are axes, not buttons')
+        eq(len([1 for s, _, _ in rows if s == 'Pad1']), len(plat.PAD1_BUTTONS) + 1,
+           'every button in the table is bound, plus Type')
+        eq(plat.pad_device(1), 'SDL-0', 'device index, because ViGEm pads share one VID/PID')
+        eq(plat.pad_device(3), 'SDL-2', 'and copy 3 is the third pad SDL enumerates')
     rows = plat.pad_ini_rows(2, windows=False)
     check(('InputSources', 'XInput', 'false') not in rows, 'no XInput row on POSIX')
+    eq({(s, k): v for s, k, v in rows}[('Pad1', 'Cross')], 'SDL-0/A',
+       'on POSIX every copy sees only its own pad, so port 1 is always device 0')
+    eq(plat.pad_device(3, windows=False), 'SDL-0', 'whichever copy it is')
 
 
 # --- quoting and processes ----------------------------------------------------
