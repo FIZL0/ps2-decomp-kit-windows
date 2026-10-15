@@ -372,8 +372,10 @@ def _git(cwd: Path):
 def shared_name(cwd: Path, remote: str) -> str:
     """The name of the branch everybody reads here: what the remote's HEAD points at, or `main`.
 
-    A clone writes `refs/remotes/<remote>/HEAD`, and that is the honest answer when it is there. A repo
-    that was `git init`-ed locally has no such ref, so the conventional names stand in.
+    Only `drop_if_merged` needs it, to ask the one question that matters before deleting a branch — does
+    the remote's shared branch already contain this merge. A clone writes `refs/remotes/<remote>/HEAD`
+    and that is the honest answer when it is there; a repo that was `git init`-ed locally has no such
+    ref, so the conventional names stand in.
     """
     g = _git(cwd)
     r = g('symbolic-ref', '--short', f'refs/remotes/{remote}/HEAD')
@@ -385,36 +387,18 @@ def shared_name(cwd: Path, remote: str) -> str:
     return 'main'
 
 
-def shared_branch(cwd: Path, remote: str, branch: str) -> bool:
-    """Is `branch` the one everybody reads, rather than one task's own?
-
-    Two ways to be that branch. It is what the remote's HEAD points at — or, *seen from a worktree*, it
-    is whatever branch the main checkout has out, which is the target a `kit run` will merge this work
-    into whatever it is called. That second one is deliberately not applied in the main checkout itself:
-    there, the branch you have out is simply the branch you are working on, and a human on a topic branch
-    is on their own branch. Everything that is not one of those two belongs to the work that is on it.
-    """
-    if branch == shared_name(cwd, remote):
-        return True
-    if Path(cwd).resolve() == ROOT.resolve():
-        return False
-    here = _git(ROOT)('branch', '--show-current').stdout.strip()
-    return bool(here) and branch == here
-
-
 def push(cwd: Path, branch: str) -> str:
     """Push `branch` to the remote `[git] push` names, merging the remote in first if it has moved.
 
-    **Only ever the branch the work itself is on.** A shared branch — the remote's default, or whatever
-    the main checkout has out — is left alone, so publishing to the branch other people read stays a
-    thing somebody chooses to do. That is the whole asymmetry here: an unpushed `task/<ID>` is work that
-    exists on one disk and nobody is watching, while an unpushed `main` is a merge its author can still
-    look at before the world sees it.
+    Any branch, the shared one included: finished work goes out, because work that exists only on this
+    disk is work one failed disk from gone. A `kit run` pushes the merge target only once the merge has
+    passed the test gate (see `runner.merge`), which is the gate that makes publishing it safe to do
+    unattended; a wrap-up pushes what it just committed.
 
-    Returns one line to print, or '' when there is nothing to say: pushing is off, this repo has no such
-    remote, or the branch is a shared one. **Never fatal.** The commit is safe in the local repo either
-    way, and a push that could not be made now is made by the next `kit done` — so a dropped network
-    does not turn a finished task into a failed one.
+    Returns one line to print, or '' when there is nothing to say: pushing is off, or this repo has no
+    such remote. **Never fatal.** The commit is safe in the local repo either way, and a push that could
+    not be made now is made by the next `kit done` — so a dropped network does not turn a finished task
+    into a failed one.
 
     It merges rather than rebases when the remote has moved: the worktree branches of a `kit run` are
     based on these commits, and rebasing the branch they came from turns every later merge into a fight.
@@ -425,8 +409,6 @@ def push(cwd: Path, branch: str) -> str:
     g = _git(cwd)
     if g('remote', 'get-url', remote).returncode:
         return ''  # no remote of that name: nothing to push to, and nothing worth saying about it
-    if shared_branch(cwd, remote, branch):
-        return ''  # yours to publish; `cmd_done` says so where somebody is reading
     if not g('push', '-q', remote, branch).returncode:
         return f'pushed {branch} → {remote}'
     if g('branch', '--show-current').stdout.strip() != branch:
@@ -444,12 +426,12 @@ def push(cwd: Path, branch: str) -> str:
 def drop_if_merged(cwd: Path, branch: str) -> str:
     """Drop `branch` from the remote, but only once the remote can be seen to hold it.
 
-    The ordering is the whole reason this is not a plain delete. Nothing auto-pushes the shared branch
-    any more, so just after a local merge the remote has no copy of that merge — deleting the task
-    branch then would take with it the only copy of that work the remote has. So it stays until the
-    remote's shared branch actually contains it, at which point it is redundant and goes. What is left
-    on the remote is therefore "work the shared branch has not published yet", which is a more useful
-    list than "merges that went wrong" and is never a list with something missing from it.
+    The ordering is the whole reason this is not a plain delete. The merge target is normally pushed
+    just before this runs, so the check passes at once and the branch goes — but when that push could
+    not be made (no network, a remote that moved), the remote has no copy of the merge, and deleting the
+    task branch then would take with it the only copy of that work the remote has. So it stays until the
+    remote's shared branch actually contains it. What is left on the remote is therefore exactly the
+    work the remote's shared branch has not got yet, and never a list with something missing from it.
     """
     remote = cfg(False).push_remote
     if not remote:
@@ -532,16 +514,12 @@ def cmd_done(argv: list[str]) -> int:
         return 1
     print(subprocess.run(['git', 'log', '-1', '--oneline'], cwd=str(cwd),
                          capture_output=True, text=True).stdout.strip())
-    # Pushed here, not by hand: a task branch nobody ever pushed is work that exists on one disk, and the
-    # one that gets left behind is always the one whose merge went wrong. The shared branch is the
-    # exception and `push` enforces it — but silently, so say it here, where somebody is reading.
+    # Pushed here, not by hand: a branch nobody ever pushed is work that exists on one disk, and the one
+    # that gets left behind is always the one whose merge went wrong.
     here = subprocess.run(['git', 'branch', '--show-current'], cwd=str(cwd),
                           capture_output=True, text=True).stdout.strip()
     if here and (line := push(cwd, here)):
         print(line)
-    elif here and (remote := cfg(False).push_remote) and shared_branch(cwd, remote, here):
-        print(f'{here} is not pushed: a wrap-up only pushes a task branch. Push it yourself when the '
-              f'merge is one you want everyone to have:  git push {remote} {here}')
     if not a.blocked:
         print(f'Journal: `kit journal state {a.id}` — an entry whose newest file is still -PART means you '
               f'left something for the next session.')

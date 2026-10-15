@@ -80,14 +80,22 @@ committed on. One call, so a wrap-up cannot be half-done — the state where the
 task is still open is the one that confuses the next session most, and the state where it is committed but
 only on this disk is the one that loses work outright.
 
-Pushing your own branch is nobody's manual step: `kit done` pushes the branch you are on when it is a
-task's own (an agent's `task/<ID>` from its worktree, a topic branch here), and a `kit run` pushes the
-branch of any task whose merge it had to leave for a human. Publishing the **shared** branch stays a
-decision somebody makes: neither a wrap-up nor a run pushes it, and a wrap-up in the main checkout prints
-the one-line `git push` instead. A merged `task/<ID>` is dropped from the remote, but only once the remote
-actually holds the merge — before that, the branch is the only copy of that work the remote has. A remote
-that has moved is merged in first, never rebased, because the run's worktree branches are based on those
-commits. A push that fails is a logged line and nothing more. Turn it off with `[git] push = false`.
+Pushing is nobody's manual step: `kit done` pushes the branch it committed on, and a `kit run` pushes
+the merge target once that merge has passed the test gate — which is what makes publishing it unattended
+defensible, since what goes out has been merged, archived and tested. A merged `task/<ID>` is then dropped
+from the remote; if the push could not be made, the branch stays, because until the remote holds the merge
+that branch is the only copy of the work it has. A remote that has moved is merged in first, never
+rebased, because the run's worktree branches are based on those commits. A push that fails is a logged
+line and nothing more. `[git] push = false` turns it all off; `[git] push_merge = false` keeps the task
+branches going out but leaves the merge local until a person has read it.
+
+**A conflict the runner cannot join goes to a Claude session, not to you.** `joinable()` decides what can
+be joined mechanically — files where a line is a whole record: the task list, the journal, the oracle's
+address list. Anything else needs reading, so the runner starts one session per such merge, in the main
+checkout, with the conflict and the tail of `context/notes/master.md` in its prompt; it resolves, commits
+and stops, and the runner tests and pushes as usual. One session per merge rather than one long-lived
+one, so merge twenty costs what merge one did. `[run] fix_merges = false` goes back to leaving them for
+a human.
 
 ## Code map
 

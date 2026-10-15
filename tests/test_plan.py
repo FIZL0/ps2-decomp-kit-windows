@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ps2kit import plan  # noqa: E402
 from ps2kit import journal as J  # noqa: E402
 from ps2kit import checks  # noqa: E402
-from ps2kit.config import cfg  # noqa: E402
+from ps2kit.config import Config, cfg  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILED: list[str] = []
@@ -495,6 +495,93 @@ def test_runner_union():
        'comments and blank lines survive the join (a note belongs to the line under it)')
 
 
+def test_runner_fixer():
+    print('run: the conflict a join cannot do goes to a session, not to a human')
+    from ps2kit import runner as R
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / 'r'
+        (repo / 'context' / 'notes').mkdir(parents=True)
+        run = lambda *a, **kw: subprocess.run(['git', *a], cwd=str(repo), capture_output=True, text=True, **kw)
+        run('init', '-q', '-b', 'main')
+        run('config', 'user.email', 't@example.invalid')
+        run('config', 'user.name', 'test')
+        (repo / 'f.rs').write_text('fn tick() { base(); }\n', encoding='utf-8')
+        run('add', '-A'); run('commit', '-qm', 'base')
+        run('checkout', '-q', '-b', 'task/T9')
+        (repo / 'f.rs').write_text('fn tick() { theirs(); }\n', encoding='utf-8')
+        run('add', '-A'); run('commit', '-qm', 'T9')
+        run('checkout', '-q', 'main')
+        (repo / 'f.rs').write_text('fn tick() { ours(); }\n', encoding='utf-8')
+        run('add', '-A'); run('commit', '-qm', 'ours')
+        base = run('rev-parse', 'HEAD').stdout.strip()   # where main sits before each attempt
+
+        # A stub agent: the kit already has KIT_AGENT for this, so no model is called. It is handed the
+        # real prompt on argv and works on the real half-done merge, which is the whole point — the
+        # thing under test is the state the runner leaves behind and what it makes of what came back.
+        agent = Path(tmp) / 'agent'
+        agent.write_text('#!/bin/sh\n'
+                         'echo "$2" > "$FIXER_PROMPT"\n'
+                         'cd "$FIXER_REPO" || exit 1\n'
+                         'case "$FIXER_ACT" in\n'
+                         '  resolve) printf "fn tick() { ours(); theirs(); }\\n" > f.rs\n'
+                         '           git add f.rs && git commit -q --no-edit ;;\n'
+                         '  abort)   git merge --abort ;;\n'
+                         '  nothing) : ;;\n'
+                         'esac\n', encoding='utf-8')
+        agent.chmod(0o755)
+        prompt_file = Path(tmp) / 'prompt.txt'
+        env = {'KIT_AGENT': str(agent), 'FIXER_REPO': str(repo), 'FIXER_PROMPT': str(prompt_file)}
+        real_root, real_cfg = R.ROOT, R.cfg
+        R.ROOT = repo
+        R.cfg = lambda required=False: Config(raw={'paths': {'context': 'context'}})
+        R.cfg(False).__dict__['path'] = repo / 'kit.toml'
+        try:
+            import ps2kit.config as C
+            real_c_root, C.ROOT = C.ROOT, repo
+            try:
+                for act, want in (('resolve', None), ('abort', 'aborted the merge'),
+                                  ('nothing', 'did not finish the merge')):
+                    run('merge', '--abort')
+                    run('reset', '-q', '--hard', base)   # the resolve case above landed the merge
+                    conflicted = run('merge', '--no-edit', 'task/T9')
+                    check(conflicted.returncode != 0, f'[{act}] the merge really does conflict')
+                    os.environ.update({**env, 'FIXER_ACT': act})
+                    why = R.fix_merge('T9', 'main', ['f.rs'])
+                    if want is None:
+                        check(why is None, 'a session that resolves it and commits means the merge landed')
+                        check('theirs' in (repo / 'f.rs').read_text() and
+                              'ours' in (repo / 'f.rs').read_text(),
+                              "and both sides' work is in the file")
+                    else:
+                        check(why is not None and want in why, f'[{act}] reported: {why}')
+                        check('notes/fixer.log' in (why or ''), f'[{act}] and says where the transcript is')
+
+                # What the session is told. The fences are the load-bearing part: a model with the main
+                # checkout and a shell is otherwise one bad turn from doing the task itself.
+                sent = prompt_file.read_text(encoding='utf-8')
+                for must in ('task/T9', 'f.rs', 'both sides', 'git commit --no-edit', 'git merge --abort',
+                             'not doing task T9', 'do not run the test suite', '.worktrees/'):
+                    check(must in sent, f'the prompt says {must!r}')
+
+                # …and the off switch, which has to leave the merge exactly as it found it.
+                R.cfg = lambda required=False: Config(raw={'run': {'fix_merges': False},
+                                                           'paths': {'context': 'context'}})
+                run('merge', '--abort')
+                run('reset', '-q', '--hard', base)
+                run('merge', '--no-edit', 'task/T9')
+                why = R.fix_merge('T9', 'main', ['f.rs'])
+                check(why is not None and 'fix_merges is off' in why, 'switched off, it says so')
+                check(run('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode == 0,
+                      'and the half-done merge is left for the caller to abort')
+            finally:
+                C.ROOT = real_c_root
+        finally:
+            R.ROOT, R.cfg = real_root, real_cfg
+            for k in (*env, 'FIXER_ACT'):
+                os.environ.pop(k, None)
+
+
 def test_stop_hook_never_crashes():
     print('run: the Stop hook that ends an idle session')
     for payload in ('{}', 'garbage', '{"transcript_path": "/nonexistent"}', '{"transcript_path": null}'):
@@ -518,7 +605,7 @@ def main() -> int:
     for t in (test_plan_roundtrip, test_plan_index_and_sections, test_brief, test_shipped_backlog,
               test_atomic_write, test_journal, test_check_summary, test_audit, test_guard, test_inbox,
               test_runner_picking,
-              test_runner_union, test_stop_hook_never_crashes, test_cli_help):
+              test_runner_union, test_runner_fixer, test_stop_hook_never_crashes, test_cli_help):
         t()
     print()
     if FAILED:

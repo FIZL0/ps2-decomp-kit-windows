@@ -104,14 +104,14 @@ journal entry, then `kit done <ID> "<message>"` — which runs the tests, ticks 
 pushes the branch you are on, in one call. Then stop and report. Don't merge tasks, don't skip ahead. If a task turns out to be too big,
 split it into sub-tasks first (`kit plan add`), then do the first one.
 
-**Never merge, rebase, or push the shared branch by hand.** `kit done` pushes the branch it committed
-on, as long as that branch is your own — your `task/<ID>` in a worktree, or any topic branch. So the
-branch of a task whose merge went wrong is on the remote, which is the one case where a lost branch costs
-a whole session. **The shared branch is never pushed for you**, by a wrap-up or by `kit run`: whether a
-merge becomes the project's public history is the user's call, and nothing here makes it at 4am. In the
-main checkout a wrap-up says so and gives you the command, and that is the one `git push` worth running by
-hand. If a push cannot be made it is one logged line, never a failed task: the commit is already safe in
-the local repo and the next wrap-up pushes it. `[git] push` in `kit.toml` is the switch.
+**Never merge, rebase or resolve a conflict by hand.** `kit done` commits and pushes the branch it is
+on, so the branch of a task whose merge went wrong is on the remote — the one case where a lost branch
+costs a whole session. The runner merges your branch when your session ends; a conflict it cannot join
+mechanically goes to **a session of its own** that reads both sides and finishes the merge, and then the
+runner runs the tests and pushes the merge target. So leave merges and conflicts alone: doing one by hand
+races the runner. If a push cannot be made it is one logged line, never a failed task — the commit is
+already safe in the local repo and the next one pushes it. `[git] push` is the switch for all of it,
+`[git] push_merge = false` for the stricter policy where the merge waits for a person to read it.
 
 ## If you get stuck, move on
 
