@@ -112,6 +112,7 @@ def main(argv: list[str]) -> int:
     ap = parser('setup', __doc__.split('\n\n')[0])
     ap.add_argument('--force', action='store_true', help='start from scratch even if kit.toml exists')
     ap.add_argument('--no-input', action='store_true', help='fill in only what can be detected, ask nothing')
+    ap.add_argument('--iso', metavar='FILE', help='use this disc image instead of searching for one')
     a = ap.parse_args(argv)
 
     print('ps2-decomp-kit setup\n' + '=' * 20)
@@ -125,8 +126,11 @@ def main(argv: list[str]) -> int:
     print(f'Wrote {CONFIG.name} from the example. Filling in what I can find.\n')
 
     # 1. the disc
-    iso = find_iso()
-    if a.no_input:
+    iso = Path(a.iso).expanduser() if a.iso else find_iso()
+    if a.iso and not iso.exists():
+        print(f'no such image: {iso}', file=sys.stderr)
+        return 2
+    if a.no_input or a.iso:
         chosen = iso
     else:
         print('1. Your disc image. Dump your own copy of the game you own; the kit never ships game data.')
@@ -140,15 +144,25 @@ def main(argv: list[str]) -> int:
                  'Convert it first: `chdman extractcd -i game.chd -o game.cue -ob game.bin` (CHD) '
                  'or `maxcso --decompress game.cso` (CSO). The kit reads raw ISO/BIN.')
         else:
+            # Imported here rather than inside the try: an ImportError is a broken checkout, not an
+            # unreadable disc, and the handler below needs DiscError to be a name by then.
+            from ps2kit.disc import Disc, DiscError, system_cnf
             try:
-                from ps2kit.disc import Disc, system_cnf
-                serial, boot = system_cnf(Disc(chosen))
-                c = cfg()
-                c.set('game', 'serial', serial)
-                if boot:
-                    c.set('boot', 'elf', boot)
-                _say(OK, f'read the disc: serial {serial}, boot ELF {boot}')
-            except Exception as e:
+                with Disc(chosen) as d:
+                    boot = system_cnf(d)
+                # Only what the disc actually said: a homebrew image has no serial, and a disc with no
+                # VER line should leave the example's placeholder alone rather than blanking it.
+                if boot.serial:
+                    c.set('game', 'serial', boot.serial)
+                if boot.elf:
+                    c.set('boot', 'elf', boot.elf)
+                if boot.version:
+                    c.set('game', 'version', boot.version)
+                _say(OK, f'read the disc: {boot}')
+            # Narrow on purpose: DiscError is "this image is not a readable PS2 disc" and OSError is the
+            # read failing, which is what the advice below is for. A TypeError or AttributeError from this
+            # block is a bug in the kit, and swallowing it into disc advice is what hid issue #1.
+            except (DiscError, OSError) as e:
                 _say(WARN, f'could not read SYSTEM.CNF off the image ({e})',
                      'Set [game] serial by hand — PCSX2 shows it in the title bar while the game runs.')
     else:
