@@ -216,9 +216,10 @@ class Config:
     def push_remote(self) -> str | None:
         """The remote finished work is pushed to, or None when `[git] push` is off.
 
-        `kit done` pushes the branch it committed on and the runner pushes the merge target, so work is
-        never only on this machine. `push = false` turns both off; a string names a remote other than
-        origin. A repo with no such remote configured is the same as off, silently.
+        `kit done` pushes the branch it committed on, and a run pushes the branch of a task whose merge
+        it left for a human, so a task's own work is never only on this machine. The shared branch is
+        never pushed for you — see `checks.push`. `push = false` turns all of it off; a string names a
+        remote other than origin. A repo with no such remote configured is the same as off, silently.
         """
         v = self.raw.get('git', {}).get('push', True)
         return None if v is False else (str(v) if isinstance(v, str) else 'origin')

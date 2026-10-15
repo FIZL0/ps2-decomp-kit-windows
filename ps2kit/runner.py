@@ -86,8 +86,9 @@ WEEKLY_MAX = 90  # % of the account's 7-day usage; at or past it, no new task st
 PROMPT = """Unattended run: nobody will answer questions, so never ask one — decide, write down why, and go on.
 
 Do task {tid} and nothing else. You are in a git worktree on branch task/{tid}: commit here only, never touch
-the main checkout and never merge or rebase — the runner merges your branch when your session ends. Don't
-push by hand either; `kit done` pushes your branch for you, and the runner pushes the merge.
+the main checkout and never merge, rebase or push the main branch — the runner merges your branch when
+your session ends, and whether that merge goes out is the user's call, not yours or mine. `kit done`
+pushes `task/{tid}` for you, which is the one copy of your work that is not on this disk.
 {others}
 You have your own emulator copy: KIT_PCSX2={n} is set, so `kit pcsx2 start`, `kit pine`, `kit pad` and
 `kit shot` all talk to copy {n} and nobody else's. Run anything that drives the game in more than one step
@@ -527,12 +528,12 @@ def merge(tid: str, branch: str) -> str | None:
         line = next((l for l in plan_text(branch) if f'**{tid}**' in l), '')
         state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
         log(f'{tid}: merged ({state})')
-        # The merge is the moment the work becomes everyone's, so it is also the moment it leaves this
-        # machine. A failed push is logged, not fatal: the merge itself already landed.
-        from ps2kit.checks import push
-        if out := push(ROOT, branch):
-            log(f'{tid}: {out}')
-        if out := push(ROOT, f'task/{tid}', delete=True):
+        # The merge target is never pushed from here: publishing the branch everyone reads is a thing
+        # somebody chooses to do, not a side effect of a run finishing a task at 4am. What the run does
+        # instead is make sure the task's own branch is on the remote, and drop it only once the remote
+        # has the merge — see `drop_if_merged`. A failed push is logged, not fatal: the merge landed.
+        from ps2kit.checks import drop_if_merged
+        if out := drop_if_merged(ROOT, f'task/{tid}'):
             log(f'{tid}: {out}')
         return None
 

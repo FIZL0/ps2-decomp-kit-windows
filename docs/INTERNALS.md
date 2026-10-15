@@ -112,7 +112,7 @@ and no `kit.toml`.
 | `py -3 tests\test_static.py` | the static layer against inputs it builds itself: a disc image, a MIPS blob, a Ghidra dump |
 | `py -3 tests\test_live.py` | the live layer against a fake emulator it builds itself: PINE framing, the pad language, RAM search, launch |
 | `py -3 tests\test_record.py` | the watch-spec parser, region coalescing, torn-frame handling |
-| `py -3 tests\test_push.py` | the push step: a moved remote merged in, a conflicting one refused, the switches |
+| `py -3 tests\test_push.py` | the push step: the shared branch never pushed, a moved remote merged in, a conflicting one refused |
 | `py -3 tests\test_platform_win.py` | this edition's OS layer: paths, the lock, the PINE endpoint, `-cfgpath` copies, pad rows, process handling, `wt.exe` argv and its shim end to end |
 | `py -3 ps2kit\hooks\guard.py --self-test` | the context guard's decisions |
 | `cargo test --workspace` | the oracle's kit layer (`kit-oracle`) and your own port; `ps2-float` and `ps2-oracle` are tested in their own repositories |
