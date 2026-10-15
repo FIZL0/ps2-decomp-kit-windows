@@ -8,7 +8,7 @@
 //!
 //! Everything runs in one test function on purpose: it sets `KIT_ROOT`, which is process-wide.
 
-use ps2_oracle::{Disc, Ee, Kit, disc::elf_segments};
+use kit_oracle::{Ee, Kit, KitEe, disc::elf_segments, open_disc};
 use std::io::Write;
 
 const SECTOR: usize = 2048;
@@ -82,7 +82,7 @@ fn iso(path: &std::path::Path, files: &[(&str, Vec<u8>)]) {
 
 #[test]
 fn a_config_a_disc_and_a_call() {
-    let root = std::env::temp_dir().join(format!("ps2-oracle-loader-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("kit-oracle-loader-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
 
@@ -121,9 +121,9 @@ fn a_config_a_disc_and_a_call() {
     assert!(e.contains("inc") && e.contains("oracle add"), "an unknown name should help: {e}");
 
     // --- the disc ---------------------------------------------------------------------------------
-    let mut disc = Disc::open(&kit).expect("the image should open");
+    let mut disc = open_disc(&kit).expect("the image should open");
     assert_eq!(disc.boot2().unwrap(), ("SLUS_200.00".into(), "SLUS-20000".into()));
-    assert_eq!(disc.check_serial(&kit).unwrap(), "SLUS-20000");
+    assert_eq!(disc.check_serial(&kit.serial).unwrap(), "SLUS-20000");
     assert_eq!(disc.read("zz/ovl.bin").unwrap().len(), 0x10c,
                "the directory walk finds subdirectories, and case does not matter");
     let segs = elf_segments(&disc.read("SLUS_200.00").unwrap()).unwrap().len();

@@ -34,6 +34,12 @@ Decide this per area once, write it here, and then stop relitigating it. A sensi
 - **Simulation: bit-exact.** Floating-point results must match the original bit for bit, which means
   going through `ps2-float`'s `F`/`Vf` types rather than host `f32`. Enable the float lint in those
   modules so a stray host-float operation cannot creep in.
+- **The PS2 libraries are ours.** `ps2-float` (FIZL0/ps2-float: EE FPU, VU0, fdlibm, newlib rand/MT) and
+  `ps2-oracle` (FIZL0/ps2-oracle: the R5900 interpreter under `crates/kit-oracle`) live in their own
+  repositories, tag-pinned git dependencies shared with other ports. Agents may fix and extend them when a
+  port needs it (new op, missing function, wrong rounding): change it there with a test, tag a release,
+  bump the tag in every dependent (`crates/game-sim`, `crates/kit-oracle`, the other kit, opentennis) and
+  run their tests. Never vendor a copy here; nothing from crates.io either.
 - **Rendering: looks right.** Match by eye or within a small tolerance against a screenshot. Do not
   replay the GS's rasterisation to close the last few pixels, and do not open follow-up tasks to chase
   bit-level render differences — note them and move on.

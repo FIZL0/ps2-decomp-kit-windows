@@ -52,7 +52,7 @@ Every `cmd_*(argv)` takes the argument list after the subcommand, parses it with
 
 **Where the config is.** `ps2kit.config.CONFIG` is `kit.toml` in the repository root, unless
 `$KIT_CONFIG` (a file, or a directory holding one) or `$KIT_ROOT` (a directory) says otherwise —
-`crates/ps2-oracle` already honoured `$KIT_ROOT`, so both halves of the kit now agree on it. Only the
+`crates/kit-oracle` already honoured `$KIT_ROOT`, so both halves of the kit now agree on it. Only the
 config's *location* moves: `ROOT` stays the repository, because it also anchors `crates/`, `plan/` and
 the `kit` script. Two users: `kit demo`, which writes a synthetic game's config into `context/demo/`
 rather than touching the user's, and tests that need a config of their own. A config reached this way
@@ -114,7 +114,7 @@ and no `kit.toml`.
 | `py -3 tests\test_record.py` | the watch-spec parser, region coalescing, torn-frame handling |
 | `py -3 tests\test_platform_win.py` | this edition's OS layer: paths, the lock, the PINE endpoint, `-cfgpath` copies, pad rows, process handling, `wt.exe` argv and its shim end to end |
 | `py -3 ps2kit\hooks\guard.py --self-test` | the context guard's decisions |
-| `cargo test --workspace` | `ps2-float`, the oracle interpreter, and your own port |
+| `cargo test --workspace` | the oracle's kit layer (`kit-oracle`) and your own port; `ps2-float` and `ps2-oracle` are tested in their own repositories |
 
 What they deliberately do not cover: anything that needs PCSX2, Ghidra, a disc or a real pad. Those are
 checked by `kit doctor` and by using them.

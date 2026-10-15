@@ -12,7 +12,7 @@
 //! can then do what a recording cannot:
 //!
 //! ```no_run
-//! use ps2_oracle::{Ee, addr};
+//! use kit_oracle::{Ee, KitEe, addr};
 //! let mut ee = Ee::game().expect("disc");        // boot ELF + overlays, serial checked
 //! let f = addr("angle_between").unwrap();        // from research/oracle.txt, never hard-coded
 //! for k in 0..10_000u32 {
@@ -48,7 +48,7 @@
 //!   a frame looked like.
 //! * **The IOP, the SPU, the BIOS and the kernel** — no syscalls, no threads, no files, no sound, no pad.
 //! * **Memory it was never given** — an uninitialised global reads as zero rather than as whatever a
-//!   running game had there. That is the commonest cause of a false mismatch; see [`Ee::from_ram`].
+//!   running game had there. That is the commonest cause of a false mismatch; see [`KitEe::from_ram`].
 //!
 //! For all of that, record the real machine instead (`kit record`, `kit pine`). The two techniques are
 //! complementary, and the division is sharp: the oracle proves *what* a function computes, a recording
@@ -59,15 +59,21 @@
 //! **Unknown instructions panic, with the address and the encoded word.** The interpreter implements what
 //! a C compiler emits plus the EE's common extras; it is not complete, and it does not pretend to be. The
 //! message names the instruction and where it was, and `kit dis <addr>` shows it in context. The fix is
-//! to add the instruction to `src/ee.rs` — usually a dozen lines next to its neighbours — not to work
+//! to add the instruction to the interpreter — usually a dozen lines next to its neighbours — not to work
 //! around it.
+//!
+//! **The interpreter and the arithmetic are libraries of ours, not code in this kit.** [`ps2_oracle`]
+//! (FIZL0/ps2-oracle) holds the interpreter and the disc/ELF loader, [`ps2_float`] (FIZL0/ps2-float) the
+//! PS2's arithmetic, both pinned by git tag in `Cargo.toml`. A missing instruction or a wrong edge case is
+//! fixed *there*: a test, a tagged release, then the tag bumped here (and in their other dependents). This
+//! crate is only the kit's side: `kit.toml`, the serial check, overlays, the address list and skipping.
 //!
 //! **Addresses come from a file, never from source.** [`addr`] reads `[oracle] addresses` (by default
 //! `research/oracle.txt`, a `name 0xaddr` per line, added with `kit oracle add`). Addresses are specific
 //! to one build of one game: putting them in a crate makes the crate wrong for every other build, and
 //! makes the next person wonder which disc a bare hex number came from. The name is the documentation.
 //!
-//! **The serial is checked.** [`Ee::game`] refuses a disc whose `SYSTEM.CNF` boot serial is not the one in
+//! **The serial is checked.** [`KitEe::game`] refuses a disc whose `SYSTEM.CNF` boot serial is not the one in
 //! `kit.toml`. An address from a US build means something else entirely in the European one, and silent
 //! nonsense is worse than an error.
 //!
@@ -89,27 +95,25 @@
 //!   `pxor`/`pnor`, and the `*1` multiplier moves.
 //!
 //! Everything else — COP0, micro-mode VU0, the cache instructions' effects, syscalls — panics by name.
-//! Teaching it one more instruction is a dozen lines in `src/ee.rs`.
+//! Teaching it one more instruction is a dozen lines in ps2-oracle's `src/ee.rs`.
 //!
 //! # Getting state in
 //!
 //! Three ways, in increasing order of effort:
 //!
-//! 1. [`Ee::game`] — code from the disc, RAM otherwise zero. Enough for anything that only reads its
+//! 1. [`KitEe::game`] — code from the disc, RAM otherwise zero. Enough for anything that only reads its
 //!    arguments and constant tables (which, in a shipped game, is most maths).
-//! 2. [`Ee::from_ram`] — a RAM image saved from a running game (`kit state ram 3`), so globals, loaded
+//! 2. [`KitEe::from_ram`] — a RAM image saved from a running game (`kit state ram 3`), so globals, loaded
 //!    data and object pools are all exactly as they were at that moment. No disc needed, and the fastest
 //!    way to make a stubborn function behave.
 //! 3. Build the state yourself: [`Ee::write`], [`Ee::set_f32`] and friends, with [`Ee::scratch`] for
 //!    out-parameters. Verbose, but it is the only way to reach a case the game never reached.
 
-pub mod disc;
-pub mod ee;
 pub mod kit;
 
-pub use disc::Disc;
-pub use ee::{DONE, Ee};
 pub use kit::Kit;
+pub use ps2_oracle::{DONE, Disc, Ee, Hook, disc};
+pub use {ps2_float, ps2_oracle};
 
 /// The address recorded under `name` in the `[oracle] addresses` file.
 ///
@@ -125,7 +129,7 @@ pub fn addr(name: &str) -> Result<u32, String> {
 ///
 /// ```no_run
 /// # fn t() {
-/// let Some(mut ee) = ps2_oracle::game_or_skip() else { return };
+/// let Some(mut ee) = kit_oracle::game_or_skip() else { return };
 /// # }
 /// ```
 pub fn game_or_skip() -> Option<Ee> {
@@ -147,71 +151,82 @@ pub fn skip(why: &str) {
     println!("SKIPPED: {why}");
 }
 
-impl Ee {
+/// The configured disc image, or the extracted copy of it.
+///
+/// The error names the missing file and what to do about it, because a test's whole job on a machine
+/// with no disc is to say so and skip.
+pub fn open_disc(kit: &Kit) -> Result<Disc, String> {
+    Disc::open(&kit.iso, &kit.ctx("iso")).map_err(|e| {
+        format!("{e}\nDump your own disc, set [game] iso in kit.toml, then `kit extract`.")
+    })
+}
+
+/// The game as `kit.toml` describes it, on top of [`ps2_oracle::Ee`]. `use kit_oracle::KitEe` to call
+/// these as `Ee::game()`, `Ee::from_ram(…)` and `ee.check_overlay(…)`.
+pub trait KitEe: Sized {
     /// Load the game as `kit.toml` describes it: the boot ELF's `PT_LOAD` segments, then every
     /// `[[overlay]]` copied raw to its `load` address — which is what the game's own loader does.
     ///
     /// The disc's serial is checked first. RAM is `[emu] ram_mb` big and otherwise zero; see
-    /// [`Ee::from_ram`] when zero is not good enough.
-    pub fn game() -> Result<Ee, String> {
-        let kit = Kit::load()?;
-        let mut disc = Disc::open(&kit)?;
-        disc.check_serial(&kit)?;
-        let mut ee = Ee::bare(kit.ram);
-        // `[boot] elf` wins if it is set; otherwise SYSTEM.CNF says which file the console boots.
-        let boot = match kit.boot_elf.as_str() {
-            "" => disc.boot2()?.0,
-            name => name.to_string(),
-        };
-        let image = disc.read(&boot)?;
-        for (va, bytes) in disc::elf_segments(&image)? {
-            ee.load(va, bytes);
-        }
-        for o in &kit.overlays {
-            let data = disc.read(&o.file)?;
-            let at = (o.off as usize).min(data.len());
-            ee.load(o.load, &data[at..]);
-        }
-        Ok(ee)
-    }
-
-    /// Check that a RAM image holds the same overlay the disc does — in other words, that the dump came
-    /// from the build whose addresses you are about to use.
-    ///
-    /// Opt-in, because [`Ee::from_ram`] deliberately needs no disc. Worth calling once in any test suite
-    /// that uses dumps: a save state from another revision loads perfectly happily and then calls the
-    /// wrong code, and this is the only cheap way to notice.
-    pub fn check_overlay(&self, name: &str) -> Result<(), String> {
-        let kit = Kit::load()?;
-        let o = kit.overlay(name).ok_or_else(|| format!("no overlay named {name:?} in kit.toml"))?;
-        let mut disc = Disc::open(&kit)?;
-        let data = disc.read(&o.file)?;
-        let at = (o.off as usize).min(data.len());
-        let n = (data.len() - at).min(0x1000);
-        let want = &data[at..at + n];
-        let have: Vec<u8> = (0..n).map(|k| self.u8_at(o.load + k as u32)).collect();
-        if have != want {
-            return Err(format!("this RAM image holds a different {name} overlay from {}\n\
-                                The dump and the addresses must come from the same build.",
-                               disc.describe()));
-        }
-        Ok(())
-    }
+    /// [`KitEe::from_ram`] when zero is not good enough.
+    fn game() -> Result<Self, String>;
 
     /// Load a RAM image saved from a running game — `kit state ram <slot>` writes one, and PCSX2's own
     /// "save EE memory" produces the same thing: a flat dump of EE RAM from address 0.
     ///
     /// This needs no disc and no config, and it is the answer whenever a function reads a global you have
     /// not identified. Two things to watch: *when* the dump was taken (it is a moment, with whatever mode,
-    /// level and objects were live then), and *which build* it came from — [`Ee::check_overlay`] answers
+    /// level and objects were live then), and *which build* it came from — [`KitEe::check_overlay`] answers
     /// the second one.
-    pub fn from_ram(path: impl AsRef<std::path::Path>) -> Result<Ee, String> {
-        let p = path.as_ref();
-        let ram = std::fs::read(p).map_err(|e| format!("cannot read the RAM image {}: {e}", p.display()))?;
-        if ram.len() < 0x10_0000 {
-            return Err(format!("{} is only {} bytes — that is not an EE RAM image (expected 32 MB; \
-                                `kit state ram <slot>` writes one)", p.display(), ram.len()));
+    fn from_ram(path: impl AsRef<std::path::Path>) -> Result<Self, String>;
+
+    /// Check that a RAM image holds the same overlay the disc does — in other words, that the dump came
+    /// from the build whose addresses you are about to use.
+    ///
+    /// Opt-in, because [`KitEe::from_ram`] deliberately needs no disc. Worth calling once in any test suite
+    /// that uses dumps: a save state from another revision loads perfectly happily and then calls the
+    /// wrong code, and this is the only cheap way to notice.
+    fn check_overlay(&self, name: &str) -> Result<(), String>;
+}
+
+impl KitEe for Ee {
+    fn game() -> Result<Ee, String> {
+        let kit = Kit::load()?;
+        let mut disc = open_disc(&kit)?;
+        disc.check_serial(&kit.serial)?;
+        // `[boot] elf` wins if it is set; otherwise SYSTEM.CNF says which file the console boots.
+        let boot = match kit.boot_elf.as_str() {
+            "" => disc.boot2()?.0,
+            name => name.to_string(),
+        };
+        let image = disc.read(&boot)?;
+        let mut overlays = Vec::new();
+        for o in &kit.overlays {
+            let data = disc.read(&o.file)?;
+            let at = (o.off as usize).min(data.len());
+            overlays.push((o.load, data[at..].to_vec()));
         }
-        Ok(Ee::with_ram(ram))
+        let overlays: Vec<(u32, &[u8])> = overlays.iter().map(|(at, d)| (*at, d.as_slice())).collect();
+        Ee::from_program(kit.ram, &image, &overlays)
+    }
+
+    fn from_ram(path: impl AsRef<std::path::Path>) -> Result<Ee, String> {
+        let p = path.as_ref();
+        Ee::from_ram_file(p).map_err(|e| format!("{e} (`kit state ram <slot>` writes one)"))
+    }
+
+    fn check_overlay(&self, name: &str) -> Result<(), String> {
+        let kit = Kit::load()?;
+        let o = kit.overlay(name).ok_or_else(|| format!("no overlay named {name:?} in kit.toml"))?;
+        let mut disc = open_disc(&kit)?;
+        let data = disc.read(&o.file)?;
+        let at = (o.off as usize).min(data.len());
+        let n = (data.len() - at).min(0x1000);
+        if !self.holds(o.load, &data[at..at + n]) {
+            return Err(format!("this RAM image holds a different {name} overlay from {}\n\
+                                The dump and the addresses must come from the same build.",
+                               disc.describe()));
+        }
+        Ok(())
     }
 }

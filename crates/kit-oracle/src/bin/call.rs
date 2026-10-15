@@ -10,7 +10,7 @@
 //! Output is a few lines whatever happens, including on a panic: the point of the interpreter is that a
 //! failure names the instruction and the address, and that is worth more than a backtrace.
 
-use ps2_oracle::{Ee, Kit};
+use kit_oracle::{Ee, Kit, KitEe};
 
 fn main() -> std::process::ExitCode {
     match run() {

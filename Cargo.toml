@@ -1,14 +1,17 @@
 # The Rust side of ps2-decomp-kit: the PS2's arithmetic, the function oracle, and your port.
 #
-#   crates/ps2-float   the EE FPU / VU0 / libm models — what makes a port bit-exact
-#   crates/ps2-oracle  an R5900 interpreter that calls the original game's own functions (test-only)
+#   crates/kit-oracle  the function oracle wired to kit.toml: calls the original game's own functions (test-only)
 #   crates/game-sim    your port: a skeleton to fill in
+#
+# The PS2's arithmetic (FIZL0/ps2-float) and the R5900 interpreter (FIZL0/ps2-oracle) are our own
+# libraries in their own repositories, pulled in as tag-pinned git dependencies (nothing from crates.io).
+# Fix or extend them there, tag a release, and bump the tags here: see AGENT.md.
 #
 # `cargo test --workspace` works with no disc present: everything that needs the game's code skips
 # with a message naming what is missing.
 [workspace]
 resolver = "3"
-members = ["crates/ps2-float", "crates/ps2-oracle", "crates/game-sim"]
+members = ["crates/kit-oracle", "crates/game-sim"]
 
 [workspace.package]
 edition = "2024"

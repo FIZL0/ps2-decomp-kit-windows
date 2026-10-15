@@ -321,7 +321,7 @@ def test_guard():
     eq(rc, 0, 'a pattern search is not blocked...')
     check('--pgrep' in out, '...it is rewritten to the wrapper that skips the caller itself', out[:400])
 
-    rc, out = hook({'tool_name': 'Bash', 'tool_input': {'command': 'kit check -p ps2-float'}})
+    rc, out = hook({'tool_name': 'Bash', 'tool_input': {'command': 'kit check -p kit-oracle'}})
     eq(rc, 0, 'kit check is allowed')
     check('3600000' in out, 'and its Bash timeout is raised, so a cold build is not killed at two minutes',
           out[:400])

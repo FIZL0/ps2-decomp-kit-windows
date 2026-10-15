@@ -6,17 +6,27 @@ version = 4
 name = "game-sim"
 version = "1.0.0"
 dependencies = [
+ "kit-oracle",
+ "ps2-float",
+]
+
+[[package]]
+name = "kit-oracle"
+version = "1.0.0"
+dependencies = [
  "ps2-float",
  "ps2-oracle",
 ]
 
 [[package]]
 name = "ps2-float"
-version = "1.0.0"
+version = "0.2.0"
+source = "git+https://github.com/FIZL0/ps2-float?tag=v0.2.0#817751d2d1efadbec4fad9f4eda6fead93115360"
 
 [[package]]
 name = "ps2-oracle"
-version = "1.0.0"
+version = "0.1.1"
+source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.1#f9e908284ed87e28bb7abee5c64d537bb1267e5d"
 dependencies = [
  "ps2-float",
 ]
