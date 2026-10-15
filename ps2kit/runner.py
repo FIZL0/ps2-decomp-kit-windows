@@ -86,7 +86,8 @@ WEEKLY_MAX = 90  # % of the account's 7-day usage; at or past it, no new task st
 PROMPT = """Unattended run: nobody will answer questions, so never ask one — decide, write down why, and go on.
 
 Do task {tid} and nothing else. You are in a git worktree on branch task/{tid}: commit here only, never touch
-the main checkout and never merge, rebase or push — the runner merges your branch when your session ends.
+the main checkout and never merge or rebase — the runner merges your branch when your session ends. Don't
+push by hand either; `kit done` pushes your branch for you, and the runner pushes the merge.
 {others}
 You have your own emulator copy: KIT_PCSX2={n} is set, so `kit pcsx2 start`, `kit pine`, `kit pad` and
 `kit shot` all talk to copy {n} and nobody else's. Run anything that drives the game in more than one step
@@ -526,6 +527,13 @@ def merge(tid: str, branch: str) -> str | None:
         line = next((l for l in plan_text(branch) if f'**{tid}**' in l), '')
         state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
         log(f'{tid}: merged ({state})')
+        # The merge is the moment the work becomes everyone's, so it is also the moment it leaves this
+        # machine. A failed push is logged, not fatal: the merge itself already landed.
+        from ps2kit.checks import push
+        if out := push(ROOT, branch):
+            log(f'{tid}: {out}')
+        if out := push(ROOT, f'task/{tid}', delete=True):
+            log(f'{tid}: {out}')
         return None
 
 
@@ -538,6 +546,9 @@ def finish(tid: str, n: int, sid: str, branch: str) -> None:
     if why := merge(tid, branch):
         log(f'{tid}: LEFT FOR A HUMAN — {why}. Its {len(commits)} commits are on task/{tid}: '
             f'{" / ".join(commits)[:300]}')
+        from ps2kit.checks import push  # an unmerged branch is the one copy of that work: get it off this disk
+        if out := push(ROOT, f'task/{tid}'):
+            log(f'{tid}: {out}')
 
 
 # --- watching a session --------------------------------------------------------

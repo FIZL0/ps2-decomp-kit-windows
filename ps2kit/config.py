@@ -211,6 +211,18 @@ class Config:
     def build_error_re(self) -> re.Pattern:
         return re.compile(self.raw.get('build', {}).get('build_error') or r'^error(\[E[0-9]+\])?:|: error:')
 
+    # --- [git] ----------------------------------------------------------------
+    @property
+    def push_remote(self) -> str | None:
+        """The remote finished work is pushed to, or None when `[git] push` is off.
+
+        `kit done` pushes the branch it committed on and the runner pushes the merge target, so work is
+        never only on this machine. `push = false` turns both off; a string names a remote other than
+        origin. A repo with no such remote configured is the same as off, silently.
+        """
+        v = self.raw.get('git', {}).get('push', True)
+        return None if v is False else (str(v) if isinstance(v, str) else 'origin')
+
     # --- [paths] --------------------------------------------------------------
     def ctx(self, *parts: str) -> Path:
         """A path under the private, git-ignored working dir; its parent is created."""

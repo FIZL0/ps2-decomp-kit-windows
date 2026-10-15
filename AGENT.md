@@ -100,9 +100,16 @@ rest of the session. `docs/CONTEXT.md` explains each measure; the short version:
 ## One task at a time
 
 "Continue" means: `kit plan next`, read `kit plan brief <ID>`, do that task completely, write the
-journal entry, then `kit done <ID> "<message>"` — which runs the tests, ticks the task and commits in
-one call. Then stop and report. Don't merge tasks, don't skip ahead. If a task turns out to be too big,
+journal entry, then `kit done <ID> "<message>"` — which runs the tests, ticks the task, commits and
+pushes the branch you are on, in one call. Then stop and report. Don't merge tasks, don't skip ahead. If a task turns out to be too big,
 split it into sub-tasks first (`kit plan add`), then do the first one.
+
+**Never push, merge or rebase by hand.** `kit done` pushes the branch it committed on — your
+`task/<ID>` in a worktree, `main` in the main checkout — and `kit run` pushes the merge target after
+each merge. So finished work leaves this machine by itself, and the branch of a task whose merge went
+wrong is on the remote too, which is the one case where a lost branch costs a whole session. If a push
+cannot be made it is one logged line, never a failed task: the commit is already safe in the local repo
+and the next wrap-up pushes it. `[git] push` in `kit.toml` is the switch.
 
 ## If you get stuck, move on
 

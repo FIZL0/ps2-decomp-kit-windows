@@ -50,9 +50,10 @@ The kit's own test suites all pass on this tree:
 
 ```
 py -3 tests\test_plan.py           # -> all checks passed
-py -3 tests\test_static.py         # -> 47 passed, 0 failed
-py -3 tests\test_live.py           # -> 43 passed, 0 failed
+py -3 tests\test_static.py         # -> 50 passed, 0 failed
+py -3 tests\test_live.py           # -> 49 passed, 0 failed
 py -3 tests\test_record.py         # -> 25 passed, 0 failed
+py -3 tests\test_push.py           # -> 15 passed, 0 failed
 py -3 tests\test_platform_win.py   # -> all checks passed
 py -3 ps2kit\hooks\guard.py --self-test
 cargo test --workspace

@@ -49,6 +49,16 @@ lint = ""
 # Lines matching these mean "the build broke" rather than "a test failed", for `kit check`'s summary.
 build_error = "^error(\\[E[0-9]+\\])?:|: error:"
 
+[git]
+# Where finished work goes, so it never sits on one disk: `./kit done` pushes the branch it just
+# committed on (an agent's task/<ID> in its worktree, main in the main checkout) and `./kit run`
+# pushes the merge target after each merge, dropping the merged task branch from the remote. When
+# the remote has moved it is merged in first, never rebased — the run's worktree branches are based
+# on these commits. A push that fails is logged and nothing more: the commit is already safe here.
+# `false` turns it off; a string names a remote other than origin.
+push = "origin"
+
+
 [paths]
 context = "context"           # private, git-ignored: disc files, dumps, captures, RAM images
 journal = "research/journal"  # notes, in git (no game data)

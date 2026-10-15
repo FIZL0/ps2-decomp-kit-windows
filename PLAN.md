@@ -13,7 +13,7 @@ kit plan brief T7             # its line, its own file, its journal, the files i
                                 # ... do the work ...
 kit check                     # tests
 kit journal new T7 walker     # the entry, including what you could not verify
-kit done T7 "port the walker" # tests again, tick the task, commit
+kit done T7 "port the walker" # tests again, tick the task, commit, push
 ```
 
 Then stop and report what you did and what you did not verify. One task per iteration. Don't merge two
@@ -75,9 +75,16 @@ kit done T7 "partial: tables read" --blocked "needs a save state in the second s
 ```
 
 It runs the test command, runs the float lint if the port has one, refuses to commit if the tests fail,
-ticks or blocks the task, and commits everything including the journal entry. One call, so a wrap-up
-cannot be half-done — the state where the code is committed but the task is still open is the one that
-confuses the next session most.
+ticks or blocks the task, commits everything including the journal entry, and pushes the branch it
+committed on. One call, so a wrap-up cannot be half-done — the state where the code is committed but the
+task is still open is the one that confuses the next session most, and the state where it is committed but
+only on this disk is the one that loses work outright.
+
+Pushing is nobody's manual step: `kit done` pushes the branch you are on (an agent's `task/<ID>` from
+its worktree, `main` from the main checkout), and `kit run` pushes the merge target after every merge and
+drops the merged `task/<ID>` from the remote. A remote that has moved is merged in first, never rebased,
+because the run's worktree branches are based on those commits. A push that fails is a logged line and
+nothing more. Turn it off with `[git] push = false`.
 
 ## Code map
 

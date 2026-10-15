@@ -363,6 +363,45 @@ def cmd_audit(argv: list[str]) -> int:
 
 # --- kit done ----------------------------------------------------------------
 
+def push(cwd: Path, branch: str, *, delete: bool = False) -> str:
+    """Push `branch` to the remote `[git] push` names, merging the remote in first if it has moved.
+
+    Returns one line to print, or '' when there is nothing to say: pushing is off, or this repo has no
+    such remote. **Never fatal.** The commit is safe in the local repo either way, and a push that could
+    not be made now is made by the next `kit done` or the next merge — so a dropped network does not
+    turn a finished task into a failed one.
+
+    It merges rather than rebases when the remote has moved: the worktree branches of a `./kit run` are
+    based on these commits, and rebasing the branch they came from turns every later merge into a fight.
+    """
+    remote = cfg(False).push_remote
+    if not remote:
+        return ''
+
+    def g(*a: str):
+        return subprocess.run(['git', *a], cwd=str(cwd), capture_output=True, text=True)
+
+    if g('remote', 'get-url', remote).returncode:
+        return ''  # no remote of that name: nothing to push to, and nothing worth saying about it
+    if delete:
+        ok = not g('push', '-q', remote, '--delete', branch).returncode
+        return f'pushed: dropped the merged {branch} from {remote}' if ok else ''
+    if not g('push', '-q', remote, branch).returncode:
+        return f'pushed {branch} → {remote}'
+    if g('branch', '--show-current').stdout.strip() != branch:
+        return f'! {branch} did not push (it is committed locally; push it by hand)'
+    g('fetch', '-q', remote)
+    if g('merge', '--no-edit', f'{remote}/{branch}').returncode:
+        g('merge', '--abort')
+        return (f'! {branch} did not push: {remote}/{branch} has moved and merging it conflicts. '
+                f'Nothing is lost — resolve it by hand, then push.')
+    if g('push', '-q', remote, branch).returncode:
+        return f'! {branch} did not push (it is committed locally; push it by hand)'
+    return f'pushed {branch} → {remote}, after merging {remote}/{branch} into it'
+
+
+
+
 def cmd_done(argv: list[str]) -> int:
     from ps2kit.cli import parser
     ap = parser('done', __doc__)
@@ -426,6 +465,12 @@ def cmd_done(argv: list[str]) -> int:
         return 1
     print(subprocess.run(['git', 'log', '-1', '--oneline'], cwd=str(cwd),
                          capture_output=True, text=True).stdout.strip())
+    # Pushed here, not by hand: a task branch nobody ever pushed is work that exists on one disk, and the
+    # one that gets left behind is always the one whose merge went wrong.
+    here = subprocess.run(['git', 'branch', '--show-current'], cwd=str(cwd),
+                          capture_output=True, text=True).stdout.strip()
+    if here and (line := push(cwd, here)):
+        print(line)
     if not a.blocked:
         print(f'Journal: `kit journal state {a.id}` — an entry whose newest file is still -PART means you '
               f'left something for the next session.')
