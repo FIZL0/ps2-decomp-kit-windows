@@ -263,6 +263,39 @@ class Config:
         v = self.raw.get('git', {}).get('push', True)
         return None if v is False else (str(v) if isinstance(v, str) else 'origin')
 
+    # --- [run] ----------------------------------------------------------------
+    @property
+    def fix_merges(self) -> bool:
+        """Whether a conflict the runner cannot join goes to a Claude session instead of to a human.
+
+        On by default: the alternative is eight finished tasks waiting for somebody to merge them by
+        hand, which is what this replaced. `[run] fix_merges = false` gets that behaviour back.
+        """
+        return bool(self.raw.get('run', {}).get('fix_merges', True))
+
+    @property
+    def fix_timeout(self) -> int:
+        """Seconds a merge fixer may take before the merge is left for a human instead."""
+        return int(self.raw.get('run', {}).get('fix_timeout', 1200))
+
+    @property
+    def fix_model(self) -> str:
+        """The model that fixes merges. The default is the one the run's agents use."""
+        return str(self.raw.get('run', {}).get('fix_model')
+                   or os.environ.get('KIT_MODEL') or 'opus')
+
+    @property
+    def push_merge(self) -> bool:
+        """Whether a `./kit run` pushes the merge target after a merge that passed the test gate.
+
+        On by default, and the test gate is why that is defensible: what goes out has been merged,
+        archived and tested. The other policy — publishing the branch everyone reads is a decision a
+        person makes after reading the merge, not a side effect of a run finishing a task at 4am — is
+        `push_merge = false`, which logs the `git push` to run instead. `[git] push` still gates all of
+        it, and a task branch is pushed either way: that one is the only copy of an agent's work.
+        """
+        return bool(self.raw.get('git', {}).get('push_merge', True)) and bool(self.push_remote)
+
     # --- [paths] --------------------------------------------------------------
     def ctx(self, *parts: str) -> Path:
         """A path under the private, git-ignored working dir; its parent is created."""

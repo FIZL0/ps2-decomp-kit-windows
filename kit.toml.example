@@ -59,6 +59,20 @@ build_error = "^error(\\[E[0-9]+\\])?:|: error:"
 # based on these commits. A push that fails is logged and nothing more: the commit is already safe
 # here. `false` turns it off; a string names a remote other than origin.
 push = "origin"
+# Whether a run pushes the merge target after a merge that passed the test gate. `false` is the
+# stricter policy — the merge waits in the local repo until a person has read it — and then the run
+# logs the `git push` to run. Task branches go out either way: one is the only copy of an agent's work.
+push_merge = true
+
+[run]
+# A merge conflict `kit run` cannot join mechanically (anything that is not a file of one record
+# per line) goes to a Claude session of its own in the main checkout, which reads both sides and
+# finishes the merge; the run then tests and pushes it as usual. One session per merge, so the
+# twentieth costs what the first did. `false` leaves those merges for a human instead, which is what
+# happens anyway when the session cannot resolve one honestly.
+fix_merges = true
+fix_timeout = 1200          # seconds one of those may take before the merge is left for a human
+fix_model   = ""            # empty: the model the run's agents use
 
 
 [paths]

@@ -85,9 +85,10 @@ WEEKLY_MAX = 90  # % of the account's 7-day usage; at or past it, no new task st
 PROMPT = """Unattended run: nobody will answer questions, so never ask one — decide, write down why, and go on.
 
 Do task {tid} and nothing else. You are in a git worktree on branch task/{tid}: commit here only, never touch
-the main checkout and never merge, rebase or push the main branch — the runner merges your branch when
-your session ends, and whether that merge goes out is the user's call, not yours or mine. `kit done`
-pushes `task/{tid}` for you, which is the one copy of your work that is not on this disk.
+the main checkout and never merge or rebase — the runner merges your branch when your session ends, and
+a conflict it cannot join mechanically goes to a session of its own that reads and finishes it, so leave
+conflicts alone too. `kit done` pushes `task/{tid}` for you; the runner pushes the merge once it has
+passed the tests.
 {others}
 You have your own emulator copy: KIT_PCSX2={n} is set, so `kit pcsx2 start`, `kit pine`, `kit pad` and
 `kit shot` all talk to copy {n} and nobody else's. Run anything that drives the game in more than one step
@@ -408,6 +409,21 @@ def agent_argv(prompt: str, sid: str, model: str, idle: int) -> list[str]:
             '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})]
 
 
+def fix_cmd(prompt: str) -> list[str]:
+    """The command for a merge fixer: one prompt, one answer, no session to keep.
+
+    `-p` rather than an interactive session, which is what makes this work on Windows too — there is no
+    way to type into a running console there, and a one-shot run needs nobody to type into it. argv, not
+    a shell string, because the prompt is a paragraph and quoting it through a shell buys nothing.
+    """
+    c = cfg(False)
+    lean = [] if os.environ.get('KIT_LEAN') == '0' else \
+        ['--tools', 'Bash,Read,Edit,Write', '--setting-sources', 'project,local', '--strict-mcp-config']
+    return [os.environ.get('KIT_AGENT', 'claude'), '-p', prompt,
+            '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion',
+            '--model', c.fix_model, *lean]
+
+
 def brief_for(tid: str, cwd: Path) -> str:
     r = sp.run([sys.executable, str(ROOT / 'kit'), 'plan', 'brief', tid], cwd=str(cwd), capture_output=True, text=True)
     return r.stdout or f'(kit plan brief {tid} produced nothing: {r.stderr.strip()[:200]})'
@@ -543,6 +559,84 @@ def union(files: list[str], tid: str, branch: str) -> bool:
     return True
 
 
+FIXER = """A merge of task/{tid} into {branch} is half-done in this checkout and git could not finish it \
+by itself. Finish it. Nobody will answer questions: decide, and say what you decided.
+
+Conflicted files:
+{files}
+
+What this is: an unattended run gave several agents a task each, on their own branch, and is merging them \
+one at a time. The runner joins conflicts in record-per-line files itself; this one needs reading, which is \
+why you are here instead of a human.
+
+1. `git status` and `git diff` to see it. Resolve every conflict so that **both sides' intent survives** — \
+two agents each did work somebody wanted, and a resolution that drops one of them silently is the worst \
+outcome available. Where they genuinely cannot both hold, keep the one that matches {branch}'s current \
+direction and say so.
+2. Change nothing the merge did not touch. You are not reviewing the code and you are not doing task \
+{tid}'s work: a conflict is all that is in front of you.
+3. Then `git commit --no-edit` to land the merge. Then stop. Do not push, do not run the test suite (the \
+runner runs it as soon as you are done, and the agents are using the build directories), do not merge, \
+rebase or delete anything else, do not touch the worktrees under .worktrees/ or `git stash` — the runner \
+is holding the checkout's own edits in a stash and will put them back.
+4. If it cannot be resolved honestly — the two sides contradict each other and picking needs a human — run \
+`git merge --abort` and say why in one line. That is a real answer, not a failure.
+
+What happened on earlier merges in this run:
+{history}
+"""
+
+
+def fix_log(line: str) -> None:
+    """One line per fixed merge, for the next fixer and for whoever reads the run afterwards."""
+    f = cfg(False).ctx('notes/master.md')
+    with open(f, 'a', encoding='utf-8') as fh:
+        fh.write(line.rstrip() + '\n')
+
+
+def fix_merge(tid: str, branch: str, files: list[str]) -> str | None:
+    """Give a conflict git could not join to a Claude session, in the main checkout. None when it landed.
+
+    One session per merge, run to completion while the caller waits — the merge lock is already held, so
+    there is nothing to be gained from doing it in the background and plenty to lose. Each one starts with
+    an empty context and the tail of `notes/master.md`, so what it knows is what it needs to know rather
+    than everything that happened today.
+
+    Never fatal: a fixer that fails, times out, or is not installed leaves the merge exactly as it was for
+    the caller to abort, and the task is reported as left for a human, which is what used to happen to
+    every conflict of this kind.
+    """
+    c = cfg(False)
+    if not c.fix_merges:
+        return 'conflicts a join cannot resolve, and [run] fix_merges is off'
+    history = ''.join(open(c.ctx('notes/master.md'), encoding='utf-8').readlines()[-12:]) \
+        if c.ctx('notes/master.md').exists() else '(nothing yet: this is the first)'
+    prompt = FIXER.format(tid=tid, branch=branch, files='\n'.join(f'  {f}' for f in files),
+                          history=history.strip() or '(nothing yet)')
+    logfile = c.ctx('notes/fixer.log')
+    log(f'{tid}: conflicts in {", ".join(files)} need reading — handing them to a session')
+    with open(logfile, 'a', encoding='utf-8') as fh:
+        fh.write(f'\n=== {dt.datetime.now().isoformat(timespec="seconds")} {tid} '
+                 f'{", ".join(files)}\n')
+        try:
+            r = sp.run(fix_cmd(prompt), cwd=str(ROOT), stdout=fh, stderr=sp.STDOUT,
+                       timeout=c.fix_timeout)
+        except FileNotFoundError:
+            return f'no agent command to fix the conflicts with (KIT_AGENT={os.environ.get("KIT_AGENT", "claude")})'
+        except sp.TimeoutExpired:
+            fix_log(f'{tid}: fixer timed out after {c.fix_timeout}s — left for a human')
+            return f'the session fixing the conflicts ran past {c.fix_timeout}s'
+    if git('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode == 0:
+        fix_log(f'{tid}: fixer left the merge unfinished — left for a human')
+        return f'the session did not finish the merge (exit {r.returncode}); see {logfile.relative_to(ROOT)}'
+    if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
+        fix_log(f'{tid}: fixer aborted the merge — left for a human')
+        return f'the session aborted the merge; its reason is in {logfile.relative_to(ROOT)}'
+    fix_log(f'{tid}: conflicts in {", ".join(files)} resolved by a session')
+    log(f'{tid}: the session resolved {", ".join(files)} and committed the merge')
+    return None
+
+
 def merge(tid: str, branch: str) -> str | None:
     """Merge task/<tid> into the default branch: merge, archive ticks, run the tests, delete the branch.
 
@@ -562,11 +656,18 @@ def merge(tid: str, branch: str) -> str | None:
         try:
             if git('merge', '--no-edit', f'task/{tid}').returncode:
                 files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-                if [f for f in files if not joinable(f)] or not union(files, tid, branch):
+                if not [f for f in files if not joinable(f)] and union(files, tid, branch):
+                    git('commit', '-q', '--no-edit')
+                    log(f'{tid}: joined both sides of {", ".join(files)}')
+                else:
+                    # A join either cannot be trusted here or refused: start the conflict again from a
+                    # clean state (a refused join may have written some of its files already) and give it
+                    # to a session that can read it.
                     git('merge', '--abort')
-                    return f'conflicts in {", ".join(files)}'
-                git('commit', '-q', '--no-edit')
-                log(f'{tid}: joined both sides of {", ".join(files)}')
+                    git('merge', '--no-edit', f'task/{tid}')
+                    if why := fix_merge(tid, branch, files):
+                        git('merge', '--abort')
+                        return why
             sp.run([sys.executable, str(ROOT / 'kit'), 'plan', 'archive'], cwd=str(ROOT), capture_output=True)
             plan_files = [str(Path(cfg(False).plan).relative_to(ROOT) / n) for n in ('TODO.md', 'DONE.md')]
             if git('status', '--porcelain', '--', *plan_files).stdout.strip():
@@ -591,11 +692,21 @@ def merge(tid: str, branch: str) -> str | None:
         line = next((l for l in plan_text(branch) if f'**{tid}**' in l), '')
         state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
         log(f'{tid}: merged ({state})')
-        # The merge target is never pushed from here: publishing the branch everyone reads is a thing
-        # somebody chooses to do, not a side effect of a run finishing a task at 4am. What the run does
-        # instead is make sure the task's own branch is on the remote, and drop it only once the remote
-        # has the merge — see `drop_if_merged`. A failed push is logged, not fatal: the merge landed.
-        from ps2kit.checks import drop_if_merged
+        # Published here, and only here: the merge has passed the test gate above, which is the thing
+        # that makes pushing it unattended defensible. A failed push is logged, not fatal — the merge
+        # landed locally and the next one pushes both. `drop_if_merged` then has its answer immediately,
+        # so a merged task branch leaves the remote instead of accumulating there.
+        #
+        # `[git] push_merge = false` is for the other policy — the merge stays local until a person has
+        # read it — and then the line below says what to run. Both are defensible and which one is right
+        # belongs to whoever owns the repository, so it is a key rather than a rule.
+        from ps2kit.checks import drop_if_merged, push
+        if cfg(False).push_merge:
+            if out := push(ROOT, branch):
+                log(f'{tid}: {out}')
+        elif cfg(False).push_remote:
+            log(f'{tid}: merged, not pushed ([git] push_merge is off): '
+                f'git push {cfg(False).push_remote} {branch}')
         if out := drop_if_merged(ROOT, f'task/{tid}'):
             log(f'{tid}: {out}')
         return None

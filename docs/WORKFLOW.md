@@ -137,11 +137,9 @@ kit journal new T12 walk-ramp   # directory + stubs with the required sections
 kit done T12 "port the walk speed ramp"
 ```
 
-`done` runs the tests, ticks the task, commits, and pushes the branch it committed on when that branch
-is a task's own — your `task/<ID>` in a worktree, a topic branch here. The **shared** branch it leaves
-alone, and says so with the one-line `git push` to run when you want that merge to be everyone's. If the
-tests fail it refuses, and says whether the build broke or a test failed. A push that cannot be made is
-one line of output and nothing worse: the commit is already safe here, and the next wrap-up pushes it.
+`done` runs the tests, ticks the task, commits, and pushes the branch it committed on. If the tests fail
+it refuses, and says whether the build broke or a test failed. A push that cannot be made is one line of
+output and nothing worse: the commit is already safe here, and the next wrap-up pushes it.
 `[git] push = false` turns it off.
 
 It also runs `kit audit` before it commits: every file about to go in is checked for the addresses in
@@ -174,17 +172,21 @@ What to expect from a long run:
 - The conflicts that do happen are mostly two agents appending to the same list, so the run joins those
   itself and says which files it joined: the task list and its archive, the journal, and the oracle's
   address list — files where a line is a whole record and both sides' records belong. Anything else it
-  leaves alone, with the branch and the target untouched, and names the files in `LEFT FOR A HUMAN`.
-  Prose is on the "leaves alone" side on purpose, including `PLAN.md`'s code map: joining two reflowed
+  hands to a session of its own (the bullet below), with the branch and the target untouched until that
+  session has finished the merge.
+  Prose is on the "hands over" side on purpose, including `PLAN.md`'s code map: joining two reflowed
   paragraphs line by line produces something that reads like a sentence and is not one. So is the
   address list when the two sides give one name different addresses — the whole point of joining is
   that both sides belong, and there exactly one of them is wrong.
-- No merge is pushed: a run moves work onto the shared branch locally and stops there, because whether
-  that becomes the project's public history is yours to decide when you read it. What the run does push
-  is the branch of any task whose merge it had to leave for a human — that branch is the one copy of
-  that work, and losing it costs a whole session. A merged `task/<ID>` is dropped from the remote only
-  once the remote holds the merge, so `git ls-remote --heads origin` is the list of work the shared
-  branch has not published yet, never a list with something missing from it.
+
+- A conflict the runner cannot join mechanically does not come to you: it gets a Claude session of its
+  own, in the main checkout, which reads both sides and finishes the merge. The runner then runs the
+  tests and pushes as usual. A session that cannot resolve it honestly aborts the merge and says why,
+  and *that* is what lands in your lap — with the transcript in `context/notes/fixer.log` and one line
+  per merge in `context/notes/master.md`. `[run] fix_merges = false` turns it off.
+- Every merge that passes the tests is pushed, and the merged `task/<ID>` is dropped from the remote, so
+  `git ls-remote --heads origin` is the list of branches whose merge did not land. `[git] push_merge =
+  false` keeps the merge local until you have read it, and logs the `git push` to run.
 - Expect roughly one blocked task in five. Blocked is a result, not a failure — the reason is recorded
   and the next session can pick it up.
 - Build directories grow fast. A Rust workspace per worktree can reach tens of gigabytes; `kit check`

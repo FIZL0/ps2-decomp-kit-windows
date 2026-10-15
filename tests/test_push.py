@@ -4,13 +4,11 @@
     python3 tests/test_push.py          (no kit.toml needed, no network, no emulator, under a second)
 
 Why this one: pushing is the step nobody watches. It runs at the end of a wrap-up an agent is no longer
-reading and at the end of a merge nobody is sitting in front of, so the three ways it can be wrong are all
-silent — it quietly does not push (work sits on one disk until the disk is gone), it pushes over somebody
-by forcing or rebasing (work is gone with no copy left), or it publishes the branch everyone reads when
-nobody asked it to (a 4am merge is suddenly the project's public history). All three are exercised here
-against real git repos: a task branch pushed, the shared branch refused however it is spelled, a remote
-that moved underneath, a remote that conflicts, a merged branch dropped from the remote only once the
-remote has the merge, and the two ways pushing can be switched off.
+reading and at the end of a merge nobody is sitting in front of, so the two ways it can be wrong are both
+silent — it quietly does not push (work sits on one disk until the disk is gone), or it pushes over
+somebody by forcing or rebasing (work is gone with no copy left). Both are exercised here against real
+git repos: a branch pushed, a remote that moved underneath, a remote that conflicts, a merged branch
+dropped from the remote only once the remote has the merge, and the two ways pushing can be switched off.
 """
 from __future__ import annotations
 
@@ -73,47 +71,20 @@ def test_push() -> None:
         # how this suite passed on a fix branch and failed the moment main was checked out again.
         checks.ROOT = a
 
-        # The branch everyone reads is never pushed from here, however it is spelled: this repo has no
-        # remote HEAD (it was init-ed, not cloned), so the fallback names have to carry it.
-        check(checks.push(a, 'main') == '', 'the shared branch is not pushed by a wrap-up')
-        check(g('rev-parse', '-q', '--verify', 'main', cwd=bare).returncode != 0,
-              'and the remote really does not have it')
-        check(checks.shared_branch(a, 'origin', 'main'), 'main is shared by name where no HEAD says so')
-        check(not checks.shared_branch(a, 'origin', 'task/T9'), "and a task's own branch is not")
+        # Any branch goes out, the shared one included: `./kit run` pushes the merge target once the
+        # merge has passed the test gate, and a wrap-up pushes what it just committed.
+        check(checks.push(a, 'main') == 'pushed main → origin', 'a plain push says so')
+        check(g('rev-parse', 'main', cwd=a).stdout == g('rev-parse', 'main', cwd=bare).stdout,
+              'and the remote really has it')
 
-        # …and under a name of its own, by either of the two things that can say so. First the ref a
-        # clone writes, which is the honest answer when it is there:
+        # `shared_name` survives for one caller only: `drop_if_merged`, which has to know which remote
+        # branch should contain a merge before it deletes anything. The ref a clone writes decides it.
         g('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/release', cwd=a)
         check(checks.shared_name(a, 'origin') == 'release', "the remote's own HEAD decides when it is set")
-        check(checks.shared_branch(a, 'origin', 'release'), 'and that branch is never auto-pushed')
-        check(not checks.shared_branch(a, 'origin', 'main'),
-              'while main is just a branch once the remote says otherwise')
         g('symbolic-ref', '-d', 'refs/remotes/origin/HEAD', cwd=a)
+        check(checks.shared_name(a, 'origin') == 'main', 'and the usual names stand in when it is not')
 
-        # Second, the branch the *main checkout* has out: that is what a `./kit run` merges into, whatever
-        # it is called, and an agent in a worktree has to recognise it from over there.
-        root = repo(tmp, 'root-checkout')
-        g('checkout', '-q', '-b', 'dev', cwd=root)
-        checks.ROOT = root
-        try:
-            check(checks.shared_branch(a, 'origin', 'dev'),
-                  'seen from a worktree, the main checkout\'s branch is shared whatever it is called')
-            check(checks.push(a, 'dev') == '', 'so a wrap-up on it pushes nothing')
-        finally:
-            checks.ROOT = a
-
-        # …and that second rule stops at the main checkout's own door: there (cwd is ROOT, as pinned
-        # above) the branch you have out is the branch you are working on, so a human on a topic branch
-        # is on their own branch.
-        g('checkout', '-q', '-b', 'dev', cwd=a)
-        check(not checks.shared_branch(a, 'origin', 'dev'),
-              'in the main checkout, a topic branch is yours and not the merge target')
-        check(checks.push(a, 'dev') == 'pushed dev → origin', 'and it pushes')
-        check(checks.shared_branch(a, 'origin', 'main'), 'while main is still shared there')
-        g('checkout', '-q', 'main', cwd=a)
-        g('push', '-q', 'origin', '--delete', 'dev', cwd=a)
-
-        # a task branch, which is what a wrap-up and a run do push
+        # a task branch, which is what an agent's wrap-up pushes
         g('checkout', '-q', '-b', 'task/T9', cwd=a)
         commit(a, 'one\nT9\n', 'T9 work')
         check(checks.push(a, 'task/T9') == 'pushed task/T9 → origin', "an agent's branch pushes")
