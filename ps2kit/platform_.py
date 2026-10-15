@@ -386,26 +386,60 @@ def user_pad_env(instances: int, windows: bool | None = None) -> dict[str, str]:
             ','.join(f'0x1209/0x{0x5000 + i:04x}' for i in range(1, instances + 1))}
 
 
+# Controller port 1, bound to the kit's pad, in the Xbox-style layout `ps2kit/pad.py` presents (both
+# backends identify as a 360 pad precisely so SDL applies that mapping with no per-device configuration).
+# The device prefix is filled in per OS by `pad_ini_rows`.
+#
+# Without these, a copy inherits the *user's* port 1 — on a machine where they play with the keyboard that
+# is `Cross = Keyboard/K`, `Start = Keyboard/Return` — and `copy_config` then switches the Keyboard input
+# source off. Nothing reports a problem: `kit pad check` passes, `kit pad send` reports success, `kit shot`
+# works because it names the pad explicitly, and the game receives nothing. An agent then sees attract
+# mode changing on its own and concludes the game ignores Start.
+PAD1_BUTTONS = {
+    'Up': 'DPadUp', 'Down': 'DPadDown', 'Left': 'DPadLeft', 'Right': 'DPadRight',
+    'Cross': 'A', 'Circle': 'B', 'Square': 'X', 'Triangle': 'Y',
+    'Start': 'Start', 'Select': 'Back',
+    'L1': 'LeftShoulder', 'R1': 'RightShoulder',
+    'L2': '+LeftTrigger', 'R2': '+RightTrigger',
+    'L3': 'LeftStick', 'R3': 'RightStick',
+    'LUp': '-LeftY', 'LDown': '+LeftY', 'LLeft': '-LeftX', 'LRight': '+LeftX',
+    'RUp': '-RightY', 'RDown': '+RightY', 'RLeft': '-RightX', 'RRight': '+RightX',
+}
+
+
+def pad_device(n: int, windows: bool | None = None) -> str:
+    """Which SDL device PCSX2 should read for kit copy `n`.
+
+    Windows matches by *device index* (`SDL-<n-1>`) because ViGEm pads are indistinguishable by VID/PID —
+    so copy n must be the n-th pad SDL enumerates, which holds while the runner starts the copies in
+    order and the machine has no other controller plugged in. On Linux each copy sees only its own pad
+    (`SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT`, see `instance_env`), so it is always device 0.
+    """
+    return f'SDL-{max(0, n - 1)}' if (WINDOWS if windows is None else windows) else 'SDL-0'
+
+
 def pad_ini_rows(n: int, windows: bool | None = None) -> list[tuple[str, str, str]]:
-    """(section, key, value) rows that give kit copy `n` its pad and its pad-bound hotkeys.
+    """(section, key, value) rows that give kit copy `n` its pad, on port 1, with the pad-bound hotkeys.
 
     A copy usually runs where no compositor will render it, so the pad is the only input it has: pause and
     screenshot are bound to pad buttons (see `emu.copy_config`). Keyboard input is off, because a window
-    that steals focus must not let the user's typing pause a capture.
+    that steals focus must not let the user's typing pause a capture — which is exactly why `[Pad1]` is
+    in here too: a copy that keeps the user's keyboard-bound port 1 has no working input at all.
 
-    Windows differs in two ways. The pad is matched by *device index* (`SDL-<n-1>`) because ViGEm pads are
-    indistinguishable by VID/PID — so copy n must be the n-th pad SDL enumerates, which holds while the
-    runner starts the copies in order and the machine has no other controller plugged in. And XInput is
-    turned off: with both sources on, PCSX2 sees every ViGEm pad twice, and the second copy of pad 1 lands
-    on controller 2.
+    One Windows-only extra: XInput is turned off, because with both sources on PCSX2 sees every ViGEm pad
+    twice and the second copy of pad 1 lands on controller 2.
     """
-    dev = f'SDL-{max(0, n - 1)}' if (WINDOWS if windows is None else windows) else 'SDL-0'
+    dev = pad_device(n, windows)
     rows = [('InputSources', 'Keyboard', 'false'),
             ('InputSources', 'SDL', 'true'),
             ('Hotkeys', 'TogglePause', f'{dev}/Guide'),
             ('Hotkeys', 'Screenshot', f'{dev}/LeftStick & {dev}/RightStick')]
     if WINDOWS if windows is None else windows:
         rows.insert(2, ('InputSources', 'XInput', 'false'))
+    # `Type` is in here because a port whose type is `None` also receives nothing, silently, in exactly
+    # the same way as one bound to an input source that is switched off.
+    rows.append(('Pad1', 'Type', 'DualShock2'))
+    rows += [('Pad1', k, f'{dev}/{v}') for k, v in PAD1_BUTTONS.items()]
     return rows
 
 

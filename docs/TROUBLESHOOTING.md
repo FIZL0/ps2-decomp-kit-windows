@@ -159,6 +159,13 @@ controller 1 in the emulator's controller settings. `joy.cpl` is the quick check
 see an "Xbox 360 Controller". With several copies, note that all ViGEmBus pads share one vendor and
 product id, so the SDL device filter cannot separate them — confirm each copy bound the pad you meant.
 
+**`kit pad` reports success and the game does not react**
+Controller port 1 in that emulator's ini is bound to something else — commonly the keyboard, if that is
+how you play, which a kit copy then switches off. Everything else keeps working, which is what makes this
+expensive: the device exists, `send` succeeds, `kit shot` is fine because it names the pad explicitly,
+and the game receives nothing. `kit pad check` reads the ini and says which sources port 1 is bound to;
+`kit pcsx2 copy N` rebinds port 1 to copy N's pad.
+
 **Pressing buttons triggers save states and turbo**
 You sent `select`. PCSX2's hotkeys are Select plus a shoulder button. `kit pad` refuses `select`; if you
 are driving the pad another way, do not send it.

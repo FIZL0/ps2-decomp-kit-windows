@@ -496,7 +496,7 @@ DOC = """virtual controller: serve one, then send button and stick commands to i
   kit pad send "press start 100"
   kit pad send "stick l 0 -1" "sleep 400" "release"
   kit pad send < moves.txt             or:  kit pad script moves.txt
-  kit pad check                        can this machine make a pad, and is one serving?
+  kit pad check                        can this machine make a pad, is one serving, does PCSX2 read it?
 
 Commands: press <btn> <ms> | down <btn> | up <btn> | dpad <dir> <ms> | stick <l|r> <x> <y> |
           sleep <ms> | release | # comment        (`8f` = 8 frames instead of 8 ms)
@@ -517,7 +517,23 @@ def cmd_pad(argv: list[str]) -> int | None:
         ok, why = plat.pad_available()
         print(f'backend  {plat.pad_backend()}  {"ok" if ok else "UNUSABLE: " + why}')
         print(f'server   {transport()}  {"serving" if serving() else "not running (kit pad serve)"}')
-        return 0 if ok else 1
+        # A pad the emulator does not read is the expensive failure, and it is invisible from here: the
+        # device exists, `send` reports success, and the game gets nothing. So this asks the emulator's
+        # own ini what controller port 1 is bound to, which is the only place that answer lives.
+        from ps2kit import emu
+        inst = plat.instance()
+        port = None
+        if not emu.ini_path().exists():
+            print('port 1   no PCSX2 config yet, so nothing is bound to anything')
+        elif (port := emu.pad1_problem()):
+            fix = (f'kit pcsx2 copy {inst}   (rewrites [Pad1] for copy {inst})' if inst else
+                   'bind controller port 1 in PCSX2 (Settings -> Controllers), or run a kit copy:'
+                   '  kit pcsx2 copy 1')
+            print(f'port 1   BROKEN: {port}\n         Fix: {fix}')
+        else:
+            where = f'PCSX2 copy {inst}' if inst else 'your own PCSX2'
+            print(f'port 1   {", ".join(sorted(emu.pad1_sources())) or "unbound"}  ({where})')
+        return 0 if ok and not port else 1
     if a.cmd == 'script':
         if not a.args:
             raise SystemExit('kit pad script FILE  (one command per line)')

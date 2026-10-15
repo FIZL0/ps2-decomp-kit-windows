@@ -1052,6 +1052,60 @@ def _():
     assert 'no PCSX2 config to copy from' in str(e) and 'Run PCSX2 once yourself' in str(e)
 
 
+@check("a copy's controller port 1 is the kit pad, not whatever the user plays with")
+def _():
+    emu_env(inst='5')
+    try:
+        src = PLAT.pcsx2_config_dir('') / 'inis' / 'PCSX2.ini'
+        # The user plays with the keyboard, and has a second pad on port 2. Both share key names with
+        # port 1, which is why the write has to be section-aware.
+        src.write_text(INI + '\n[InputSources]\nKeyboard = true\n'
+                       '\n[Pad1]\nType = DualShock2\nCross = Keyboard/K\nStart = Keyboard/Return\n'
+                       '\n[Pad2]\nType = DualShock2\nStart = SDL-3/Start\nCross = SDL-3/A\n'
+                       '\n[USB1]\nType = None\n')
+        out_of(EMU.copy_config, 5)
+        ini = EMU.ini_path('5')
+        dev = PLAT.pad_device(5)
+        pad1 = EMU._ini_section(ini, 'Pad1')
+        assert pad1['Cross'] == f'{dev}/A' and pad1['Start'] == f'{dev}/Start', \
+            'a copy that keeps Keyboard/K on port 1 gets no input at all: the source is off below'
+        assert pad1['L2'] == f'{dev}/+LeftTrigger' and pad1['RLeft'] == f'{dev}/-RightX'
+        assert pad1['Type'] == 'DualShock2', 'a port whose type is None also receives nothing'
+        assert EMU._ini_section(ini, 'Pad2') == {'Type': 'DualShock2', 'Start': 'SDL-3/Start',
+                                                 'Cross': 'SDL-3/A'}, 'port 2 is left alone'
+        assert EMU._ini_section(ini, 'USB1') == {'Type': 'None'}, 'a section-blind write lands here'
+        assert EMU._ini_get(ini, 'Keyboard') == 'false' and EMU.pad1_sources('5') == {'SDL'}
+        assert EMU.pad1_problem('5') is None
+    finally:
+        os.environ.pop('KIT_PCSX2', None)
+
+
+@check('a pad nothing on port 1 is bound to is reported, instead of passing every check it has')
+def _():
+    emu_env()
+    ini = EMU.ini_path()
+    ini.write_text(INI + '\n[InputSources]\nKeyboard = false\nSDL = true\n'
+                   '\n[Pad1]\nType = DualShock2\nCross = Keyboard/K\nStart = Keyboard/Return\n')
+    assert EMU.pad1_sources() == {'Keyboard'}
+    why = EMU.pad1_problem()
+    assert why and 'Keyboard' in why and 'off' in why, \
+        'the device exists and `pad send` succeeds; this ini is the only place the truth lives'
+    rv, out, _ = out_of(PAD.cmd_pad, ['check'])
+    assert rv == 1 and 'BROKEN' in out and 'Settings -> Controllers' in out
+
+    ini.write_text(INI + '\n[InputSources]\nKeyboard = false\nSDL = true\n\n[Pad1]\nType = None\n')
+    assert 'Type = None' in (EMU.pad1_problem() or ''), 'an empty port receives nothing either'
+    EMU._ini_set_in(ini, 'Pad1', [(k, v) for sec, k, v in PLAT.pad_ini_rows(1) if sec == 'Pad1'])
+    assert EMU.pad1_problem() is None
+    rv, out, _ = out_of(PAD.cmd_pad, ['check'])
+    assert rv == 0 and 'port 1   SDL  (your own PCSX2)' in out
+
+    ini.unlink()
+    rv, out, _ = out_of(PAD.cmd_pad, ['check'])
+    assert 'no PCSX2 config yet' in out and EMU.pad1_problem() is None, \
+        'no ini is not a broken binding; it is nothing to say anything about'
+
+
 @check('the emulator this instance started is tracked by pid file and checked by name')
 def _():
     emu_env()
