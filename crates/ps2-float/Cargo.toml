@@ -1,0 +1,11 @@
+[package]
+name = "ps2-float"
+description = "PlayStation 2 arithmetic: the EE FPU, VU0 and the game's libm, bit for bit"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+# No dependencies, deliberately: every result this crate produces must be identical on every host,
+# so it may not reach for the host's libm (whose accuracy differs per platform) or for a crate that
+# might. Everything here is integer ops plus the four basic IEEE operations, which are exact by spec.
+[dependencies]

@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3 \"$CLAUDE_PROJECT_DIR/ps2kit/hooks/guard.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3 \"$CLAUDE_PROJECT_DIR/ps2kit/hooks/inbox.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3 \"$CLAUDE_PROJECT_DIR/ps2kit/hooks/inbox.py\""
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "BASH_MAX_TIMEOUT_MS": "3600000",
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+  },
+  "autoCompactWindow": 200000
+}

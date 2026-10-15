@@ -1,0 +1,72 @@
+# ps2-decomp-kit — the one file that makes the kit about *your* game.
+# Copy to `kit.toml` (git-ignored) and fill it in, or run `kit setup` to be walked through it.
+# Addresses are PS2 virtual addresses; write them as 0x… strings or plain integers.
+
+[game]
+name    = "My PS2 Game"       # free text, used in prompts and logs
+serial  = "SLUS-20000"        # the disc serial; PINE and SYSTEM.CNF must agree, or tools refuse to run
+region  = "US"                # free text: US / EU / JP …
+version = "1.00"              # free text: the disc's build, so notes say which one they describe
+iso     = "game.iso"          # your own dump, relative to the repo root (never committed)
+
+[emu]
+pcsx2      = "C:/Program Files/PCSX2/pcsx2-qt.exe"   # the exe: an absolute path, or a name on PATH
+pine_slot  = 28011            # PCSX2's default PINE slot; copy N uses pine_slot + N
+vsync_addr = "auto"           # the game's per-frame counter; "auto" = find it with `kit probe vsync`
+speed      = 1.0              # NominalScalar for kit-managed copies (1.0 = full speed)
+instances  = 4                # how many PCSX2 copies `kit run` may create (one per agent).
+                              # Keep it at 4 or fewer if the copies need pads: a ViGEm pad is an
+                              # XInput device and XInput has only four slots (see WINDOWS.md).
+ram_mb     = 32               # EE RAM size (32 on retail PS2)
+
+[boot]
+# The boot ELF named in SYSTEM.CNF. Leave empty and the kit reads it from the disc.
+elf  = ""
+# Where the boot ELF's segments land. Leave empty: taken from the ELF's own program headers.
+load = ""
+
+# Program overlays: code the game loads over a fixed address at runtime (very common on PS2 —
+# a menu overlay, a gameplay overlay, a movie player). One block per overlay. Delete if the game has none;
+# `kit elf --scan` guesses them from the disc.
+[[overlay]]
+name = "game"                 # the name used everywhere: the dump is named after it, as is `kit fn -o game …`
+file = "GAME.BIN"             # path inside the disc image
+load = "0x200000"             # the address the loader copies it to
+# off = 0                     # optional: skip a header before the code
+
+[ghidra]
+home    = "C:/ghidra_11.3_PUBLIC"   # the Ghidra install (needs the EmotionEngine processor extension)
+project = "context/ghidra"    # project dir (inside the git-ignored context/)
+name    = "ps2"               # project name
+timeout = 7200                # seconds one headless analysis may take
+
+[build]
+# How `kit check` runs the port's tests, and `kit done` gates a commit on them.
+# Any build system: cargo, meson, make, pytest… Leave empty to skip the test gate.
+test = "cargo test -q --message-format=short"
+# Optional second gate (a lint that must stay clean), run only when `test` passed.
+lint = ""
+# Lines matching these mean "the build broke" rather than "a test failed", for `kit check`'s summary.
+build_error = "^error(\\[E[0-9]+\\])?:|: error:"
+
+[paths]
+context = "context"           # private, git-ignored: disc files, dumps, captures, RAM images
+journal = "research/journal"  # notes, in git (no game data)
+plan    = "plan"              # TODO.md / DONE.md / HUMAN.md
+
+[oracle]
+addresses = "research/oracle.txt"   # "name 0xaddr" per line, for the function oracle
+
+# What you saved in each PCSX2 save-state slot. Free text; the kit only quotes it back to the agent so it
+# knows which slot to load. Keep 8 and 9 as scratch — tools overwrite them.
+[states]
+3 = "title screen, just booted"
+4 = "in-game, paused mid-level"
+5 = "a self-running demo/attract loop (no input needed)"
+8 = "scratch — tools overwrite this"
+9 = "scratch — tools overwrite this"
+
+# Named RAM addresses you have identified, so scripts and watch specs can use words instead of hex.
+# `kit sym` lists them; `kit pine @player_x` reads one.
+[symbols]
+# player_x = "0x1f4a20"

@@ -1,0 +1,83 @@
+# struct.toml — a repeating array of live objects reached through a pointer chain.
+#
+# This is the shape that half the hand-written capture scripts in the reference project were doing by
+# hand: a manager object holds a table of N pointers, each pointer is an actor, and you want the same
+# four fields out of every actor, every frame. One [[array]] block replaces the loop, the pointer
+# chasing and the column naming.
+#
+#   kit record --dry-run watch/struct.toml
+#   kit record watch/struct.toml --state 5 --seconds 20
+#
+# What the chains mean (one indirection per arrow):
+#   @match               a pointer *variable* at a fixed address
+#   @match -> 0x88       read the pointer at @match, add 0x88          (a field inside the match)
+#   @match -> 0x88 -> 0  read that pointer too                         (the object it points at)
+#
+# For the array below, `addr = "@match -> 0xa8"` is the address of the pointer table, `stride = 4`
+# steps through it, and `deref = true` says each entry is a pointer to follow. Each actor's fields
+# are then plain offsets inside it. Everything is re-resolved every frame, because the game moves
+# these objects; a null anywhere leaves that actor's cells empty for that frame and the capture
+# carries on.
+
+[watch]
+name        = "actors"
+description = "four live actors through the match object's pointer table, plus the ball"
+every       = 1
+start       = "phase == 2"          # arm when the match reaches its play phase
+stop        = "phase == 5"          # and stop again when it leaves it
+frames      = 3600                  # a hard ceiling even if `stop` never fires
+format      = "csv"
+
+[setup]
+state    = 5          # load this PCSX2 save-state slot first (`kit pcsx2 state` lists them)
+warmup   = 30         # let 30 frames pass after the load before sampling
+# pad    = "watch/pads/serve.pad"   # and play a pad script, so the capture is reproducible
+
+# --- match-wide scalars ------------------------------------------------------
+
+[[field]]
+name = "phase"
+addr = "@match -> 0x54"     # the match object's phase byte
+type = "u8"
+
+[[field]]
+name     = "ball_pos"
+addr     = "@match -> 0x88 -> 0xe0"   # match -> ball object -> its position
+type     = "f32x4"                    # PS2 vectors are 16-byte quads: f32x4 shows the w lane too
+required = true                       # if the ball goes away the match is over: stop cleanly
+
+[[field]]
+name = "ball_vel"
+addr = "@match -> 0x88 -> 0x130"
+type = "f32x3"
+
+# --- the actors --------------------------------------------------------------
+
+[[array]]
+name   = "player"      # columns: player0.pos.x … player3.anim
+addr   = "@match -> 0xa8"   # the pointer table
+count  = 4
+stride = 4             # 4 bytes between pointers
+deref  = true          # each entry is a pointer: follow it
+
+[[array.field]]
+name = "pos"
+off  = 0x3d70
+type = "f32x4"
+
+[[array.field]]
+name = "stamina"
+off  = 0x12b4
+type = "f32"
+
+[[array.field]]
+name = "state"
+off  = 0x3050
+type = "u16"
+
+# A sub-field's `off` can chase pointers too, with the same arrow rule: read the pointer at
+# element+0x60 (the actor's animation controller), then take the u16 at +0x24 of that.
+[[array.field]]
+name = "anim"
+off  = "0x60 -> 0x24"
+type = "u16"

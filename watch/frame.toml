@@ -1,0 +1,42 @@
+# frame.toml — the smallest useful watch spec: the frame counter and a few scalars.
+#
+#   kit record --dry-run watch/frame.toml      # check the spec; no emulator needed
+#   kit record watch/frame.toml --frames 300
+#
+# Every address here is a plain one (no `->`), so the planner resolves them once at startup. The
+# three @globals fields sit in one quadword, so they coalesce into a single region and the whole
+# sample costs one batched PINE read per frame. Start a new investigation from this file: add fields
+# until you can see the thing you are chasing, then split the keepers into a spec of their own.
+#
+# @names come from [symbols] in kit.toml (`kit sym` lists them, `kit probe` finds them in the
+# first place). Raw addresses work too — `addr = "0x1004c0"` — but a name still reads like prose a
+# year later, which is the point.
+
+[watch]
+name        = "frame"
+description = "frame counter plus a few game-wide scalars"
+every       = 1          # sample every frame (2 = every other frame, and so on)
+frames      = 600        # stop after 600 samples; --frames overrides it
+
+# The frame counter again, this time as a field. Worth the four bytes: the `frame` column comes from
+# the poll that woke the recorder, this one comes from the sample itself. If they ever disagree, the
+# read tore in a way `settle` did not catch — a free self-check on every row.
+[[field]]
+name = "vsync"
+addr = "@vsync"
+type = "u32"
+
+[[field]]
+name = "state"           # the game's own mode word
+addr = "@globals"
+type = "u32"
+
+[[field]]
+name = "timer"
+addr = "@globals + 4"
+type = "u32"
+
+[[field]]
+name = "players"
+addr = "@globals + 8"
+type = "u8"

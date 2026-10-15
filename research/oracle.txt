@@ -1,0 +1,12 @@
+# Named addresses for the function oracle: `addr("name")` in a Rust test resolves through this file.
+#
+#   name                 program   address   notes
+#
+# One line per function you have proved or intend to prove. The program name matters as much as the
+# address: an overlay's code shares its addresses with every other overlay, so an address with no
+# program beside it is not an address. Keep the notes short and about *behaviour* — what the function
+# computes, what its arguments are, what it reads from RAM — because that is what the next reader needs.
+#
+# This file is research, not product: addresses live here and in journal entries, never in the port.
+#
+# walk_ramp            gameplay  0x001000a0 speed ramp: (speed, stick) -> speed, args in f12/f13

@@ -1,0 +1,178 @@
+# example.toml — the whole watch-spec format, in one commented file.
+#
+# A watch spec says *what to sample*, *where from*, *when*, and *what to do first*. The recorder works
+# out the rest: it coalesces your fields into as few contiguous blocks as it can, fetches them in one
+# batched PINE read per frame, re-reads to be sure the sample came from a single frame, and writes a
+# .json sidecar saying exactly where the capture came from.
+#
+#   kit record --dry-run watch/example.toml            # resolved plan, no emulator needed
+#   kit record watch/example.toml --frames 600
+#   kit record watch/example.toml --seconds 30 --state 5 --binary
+#   kit record --diff context/capture/a.csv target/port.csv
+#
+# Addresses are PS2 virtual addresses: `0x1004c0`, bare hex `1004c0`, or `@name` from [symbols] in
+# kit.toml. kseg0/kseg1 addresses (0x80xxxxxx, 0xa0xxxxxx) are masked down to RAM for you, because
+# the decompiler shows one and PINE wants the other.
+#
+# ---------------------------------------------------------------------------------------------------
+
+[watch]
+name        = "example"      # names the default output file; keep it short
+description = "every feature of the format, on a made-up game"
+
+# --- how often, and for how long ---
+every   = 1        # sample every Nth frame. 1 = every frame. 2 halves the bandwidth.
+frames  = 600      # stop after N samples      (--frames overrides)
+seconds = 30       # and/or after S seconds of wall clock (--seconds overrides)
+                   # whichever comes first wins; a `stop` condition can end it earlier.
+
+# --- when to sample ---
+# Conditions are deliberately tiny: `<thing> <op> <number>`, joined with `and` / `or`, where <thing>
+# is a field declared below, or an address (`@phase`, `@match -> 0x54`, with an optional `:u8` type
+# suffix). An address in a condition becomes a hidden field, so it rides along in the same batched
+# read and costs nothing extra per frame. Operators: == != < <= > >=. A bare thing means "non-zero".
+start = "phase >= 2"       # don't write anything until this becomes true (arms once, stays armed)
+stop  = "phase == 5"       # stop the capture cleanly the first time this is true
+when  = "ball_live == 1"   # and while armed, only write rows where this holds
+# Leave them out and every frame is written. Conditions are evaluated on sampled frames only, so
+# `every = 4` also checks them only every 4th frame.
+
+format = "csv"     # "csv" (default) or "binary"; --binary forces binary for one run
+
+# --- what to do before sampling --------------------------------------------------------------------
+[setup]
+state     = 5                  # load this PCSX2 save-state slot first (`kit pcsx2 state` lists them)
+warmup    = 30                 # then let N frames pass before the first sample
+settle_ms = 300                # ms to wait after the state load (PCSX2 needs a moment)
+# pad     = "watch/pads/serve.pad"   # and play a pad script from the first frame, so the capture is
+                               # reproducible. One `kit pad` command per line, # comments allowed:
+                               #     stick l 0 -1
+                               #     sleep 200
+                               #     press cross 80
+                               # Pad timing is wall-clock, not frame-exact. For frame-exact input use
+                               # a PCSX2 input recording and record against that instead.
+
+# --- fields ----------------------------------------------------------------------------------------
+# One [[field]] per scalar, vector or blob. `name` becomes the column; vectors get .x/.y/.z/.w and a
+# mat4 gets .m00..m33, so a f32x4 called "pos" is four columns: pos.x pos.y pos.z pos.w.
+#
+# Types:  u8 u16 u32 u64 s8 s16 s32   f32   f32x3 f32x4   mat4   bytes:N
+#   f32x3 reads 12 bytes; PS2 vectors are nearly always 16-byte quads, so prefer f32x4 and keep the
+#   w lane — it is often a flag, and when it is garbage that tells you something too.
+#   bytes:N gives one hex-string column: the honest choice for a struct you have not decoded yet.
+#
+# `addr` is an address, or a pointer chain. Each `->` is one indirection:
+#   "@vsync"                     the u32 at @vsync
+#   "@globals + 0x24"            plain offsets add up
+#   "@match -> 0x54"             read the pointer at @match, add 0x54            (one deref)
+#   "@match -> 0x88 -> 0xe0"     read that pointer too, add 0xe0                 (two derefs)
+# Chains are re-resolved every frame, because live objects move. Fields sharing a prefix share the
+# pointer read. If a pointer is null (or points outside EE RAM), that field's cells are left empty
+# for that frame and the capture carries on — unless you mark the field `required`.
+
+[[field]]
+name = "phase"
+addr = "@match -> 0x54"
+type = "u8"
+
+[[field]]
+name = "ball_live"
+addr = "@match -> 0x55"
+type = "u8"
+
+[[field]]
+name     = "ball_pos"
+addr     = "@match -> 0x88 -> 0xe0"
+type     = "f32x4"
+required = true     # when this chain goes null the object is gone: end the capture cleanly and say
+                    # so in the sidecar, rather than filling thousands of rows with empty cells.
+
+[[field]]
+name  = "ball_speed"
+addr  = "@match -> 0x88 -> 0x140"
+type  = "f32"
+scale = 60.0        # optional: multiply on the way out (per-frame units -> per-second, say).
+                    # Careful — a scaled column is no longer bit-exact. Leave it off for proofs.
+
+[[field]]
+name = "flags"
+addr = "@match -> 0x5c"
+type = "u32"
+fmt  = "hex"        # optional formatting: "hex" for 0x…, or any printf format like "%.3f".
+                    # Default for f32 is repr(), which round-trips every bit — what a bit-exact
+                    # comparison needs. Don't set `fmt` on a column you intend to diff.
+
+[[field]]
+name = "unknown_head"
+addr = "@match -> 0x100"
+type = "bytes:64"   # one hex column: dump first, decode later
+
+# A field can also hang off a pointer *inside* a pointer, with the arrow rule all the way down:
+[[field]]
+name = "camera_mode"
+addr = "@match -> 0xbc -> 0x5c -> 0x10"
+type = "u32"
+
+# --- arrays ----------------------------------------------------------------------------------------
+# "this struct repeats N times with stride S". One block here, N x (its fields) columns out, named
+# <array><i>.<field>: player0.pos.x, player1.pos.x, … This is the single biggest saving over a
+# hand-written script, which had to spell out the loop, the derefs and the column names.
+#
+#   addr    where element 0 lives (any chain)
+#   count   how many elements
+#   stride  bytes from one element to the next
+#   deref   false (default): elements are structs laid out end to end at addr + i*stride
+#           true:            addr + i*stride holds a *pointer* to element i — follow it
+
+[[array]]
+name   = "player"
+addr   = "@match -> 0xa8"   # the match object's table of player pointers
+count  = 4
+stride = 4                  # 4 bytes per pointer
+deref  = true               # each entry is a pointer
+
+[[array.field]]
+name = "pos"
+off  = 0x3d70               # offsets inside the element; `off` takes chains too (see below)
+type = "f32x4"
+
+[[array.field]]
+name = "stamina"
+off  = 0x12b4
+type = "f32"
+
+[[array.field]]
+name = "anim"
+off  = "0x60 -> 0x24"       # the pointer at element+0x60, then its u16 at +0x24
+type = "u16"
+
+# The other shape: a plain array of structs at a fixed address, no pointers involved.
+[[array]]
+name   = "shot"
+addr   = "0x2f0e80"
+count  = 3
+stride = 0x30
+# deref = false  (the default)
+
+[[array.field]]
+name = "kind"
+off  = 0
+type = "u32"
+
+[[array.field]]
+name = "aim"
+off  = 0x10
+type = "f32x3"
+
+# ---------------------------------------------------------------------------------------------------
+# Output
+#
+#   CSV (default): a header row, then one row per sample. First column is always `frame` (the game's
+#   own frame counter, [emu] vsync_addr). Floats print with repr(), so a bit-exact diff is possible.
+#
+#   --binary: packed little-endian records — u32 frame, u32 live mask (bit i = group i resolved),
+#   then the fields at fixed offsets. For 20-minute captures where CSV would be hundreds of MB.
+#
+#   Both always get a <out>.json sidecar: game serial and version, the spec's text and hash, save
+#   state, pad script, date, frame range, frames captured/skipped/dropped, kit version, and for
+#   binary the full record layout. A capture nobody can reconstruct is not evidence.

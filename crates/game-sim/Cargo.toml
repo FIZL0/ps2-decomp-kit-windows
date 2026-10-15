@@ -1,0 +1,13 @@
+[package]
+name = "game-sim"
+description = "Your port of the game's simulation: bit-exact, headless, no engine"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ps2-float = { path = "../ps2-float" }
+
+[dev-dependencies]
+# The oracle is a *test* dependency: the shipped sim must not need the disc at runtime.
+ps2-oracle = { path = "../ps2-oracle" }

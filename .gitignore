@@ -1,0 +1,48 @@
+# Everything derived from the game lives here. Never committed, by design:
+# extracted discs, ELFs, decompilation dumps, RAM images, captures, screenshots, logs.
+/context/
+context/
+
+# Your game, your BIOS, your save states. Never commit these.
+*.iso
+*.bin
+*.cue
+*.chd
+*.cso
+*.img
+*.mdf
+*.nrg
+*.p2s
+*.p2m
+*.bios
+*.rom
+*.rom?
+
+# Your machine's configuration: which game, where your tools are.
+# kit.toml.example is committed; kit.toml is not.
+/kit.toml
+
+# Build output
+/target/
+**/target/
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.dll
+.venv/
+venv/
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Scratch
+/tmp/
+*.log
+*.tmp

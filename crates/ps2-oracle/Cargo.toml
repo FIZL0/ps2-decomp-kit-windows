@@ -1,0 +1,12 @@
+[package]
+name = "ps2-oracle"
+description = "Run one of the original game's own functions on chosen inputs, with no emulator"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+# No dependencies, deliberately. This crate reads an ISO 9660 image, a PS2 ELF and a subset of TOML and
+# interprets R5900 machine code: all of it a few hundred lines of integer work, none of it worth a
+# supply chain. Arithmetic comes from the sibling model so the oracle and the port agree by construction.
+[dependencies]
+ps2-float = { path = "../ps2-float" }

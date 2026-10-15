@@ -1,0 +1,2 @@
+Journal entries land here, one directory per task: YYYY-MM-DD-<ID>-<slug>/.
+`./kit journal new <ID> <slug>` makes one with the required sections.

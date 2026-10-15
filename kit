@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Entry point: `./kit <command>`. Keeps the repo root on sys.path so `ps2kit/` imports work from anywhere."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ps2kit.cli import main
+sys.exit(main())

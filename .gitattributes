@@ -1,0 +1,20 @@
+# Line endings are normalised to LF in the repository and checked out as LF everywhere, including
+# Windows. The kit compares captures and dumps byte for byte, and a file that changes length when it
+# crosses machines is a day lost to a diff that is not really there.
+* text=auto eol=lf
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.rs   text eol=lf
+*.java text eol=lf
+*.json text eol=lf
+kit    text eol=lf
+*.sh   text eol=lf
+
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+*.png  binary
+*.bin  binary
+*.elf  binary
