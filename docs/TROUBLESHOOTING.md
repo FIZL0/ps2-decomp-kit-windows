@@ -104,8 +104,22 @@ the console you typed it in.
 
 **The emulator runs but the game is at the BIOS screen**
 No BIOS, or the wrong path. It belongs in `%USERPROFILE%\Documents\PCSX2\bios\`, and `kit doctor`
-checks there. A portable PCSX2 install keeps its folders next to the executable instead, which the kit
-does not look in. The BIOS has to be your own dump.
+checks the `[Folders] Bios` the ini actually names. A portable PCSX2 install keeps its folders next to
+the executable instead. The BIOS has to be your own dump. `kit pcsx2 start` refuses outright when that
+folder holds no image, rather than starting an emulator that can boot nothing, and it names the BIOS it
+picked in its own output — a config with `[Filenames] BIOS` empty is the common version of this.
+
+**The emulator runs and the screenshot shows PCSX2's setup wizard**
+That config has never been through the first-run wizard, so `pcsx2-qt -- <iso>` opens the wizard and
+ignores the disc entirely. `kit pcsx2 start` now writes `[UI] SetupWizardIncomplete = false` on every
+launch, so this should not recur; if you see it, you are launching PCSX2 some other way.
+(`pcsx2-qt -testconfig` writes a default ini without a GUI, but does *not* clear that flag.)
+
+**Frame counts disagree with the retail game by a constant ratio**
+Check the BIOS region against the disc's: `kit doctor` prints both, and warns when they differ. A PAL
+BIOS boots an NTSC disc perfectly well and runs the machine at 50 Hz, so every measurement taken against
+it is off by 50/60 and nothing looks broken. The kit prefers a region-matching BIOS for its own copies
+and leaves your own configuration alone with a note.
 
 ---
 

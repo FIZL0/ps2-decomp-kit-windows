@@ -219,6 +219,126 @@ def _folder(key: str, default: str) -> Path:
     return p if p.is_absolute() else config_dir() / p
 
 
+# --- the BIOS ----------------------------------------------------------------
+
+# The region letter in a BIOS image's own ROMVER record.
+ROM_REGIONS = {'J': 'JP', 'A': 'US', 'E': 'EU', 'H': 'AS', 'C': 'CH'}
+# A disc's region from its serial prefix, which is the one place that cannot be mistyped.
+SERIAL_REGIONS = {'SLUS': 'US', 'SCUS': 'US', 'PBPX': 'US',
+                  'SLES': 'EU', 'SCES': 'EU', 'SLED': 'EU', 'SCED': 'EU',
+                  'SLPS': 'JP', 'SLPM': 'JP', 'SCPS': 'JP', 'SCAJ': 'JP',
+                  'SLAJ': 'AS', 'SLKA': 'AS', 'SCKA': 'AS'}
+# …and from `[game] region`, which kit.toml documents as free text.
+REGION_WORDS = {'US': 'US', 'USA': 'US', 'NTSC': 'US', 'NTSC-U': 'US', 'A': 'US',
+                'EU': 'EU', 'EUR': 'EU', 'E': 'EU', 'PAL': 'EU',
+                'JP': 'JP', 'JPN': 'JP', 'J': 'JP', 'NTSC-J': 'JP',
+                'AS': 'AS', 'ASIA': 'AS', 'KR': 'AS', 'CH': 'CH'}
+
+
+def bios_dir() -> Path:
+    """Where this instance keeps its BIOS images — `[Folders] Bios`, not a path the kit makes up."""
+    return _folder('Bios', 'bios')
+
+
+def bios_files(d: Path | None = None) -> list[Path]:
+    """The BIOS images in that directory, by name. Size is the filter: PCSX2 writes its `.nvm` and
+    `.mec` companions into the same place, and they are kilobytes against a ROM's four megabytes."""
+    d = bios_dir() if d is None else d
+    if not d.is_dir():
+        return []
+    return sorted((f for f in d.iterdir()
+                   if f.is_file() and f.suffix.lower() in ('.bin', '.rom', '.rom0', '')
+                   and f.stat().st_size > 1 << 20), key=lambda f: f.name)
+
+
+def bios_region(path: Path) -> str | None:
+    """Which region a BIOS image is for ('US', 'EU', 'JP', …), read out of the image itself.
+
+    PCSX2 lists BIOSes by model number, and the model-number-to-region table is folklore that is also
+    wrong — SCPH-90006 looks PAL and its ROM says `J`. The image answers the question directly. A PS2 ROM
+    is a flat ROMDIR filesystem: the `RESET` entry begins a table of 16-byte records (name[10], extinfo
+    size, data size), and each record's data sits in the image in table order, 16-byte aligned, starting
+    at offset 0. The `ROMVER` record is 16 ASCII bytes, `VVVVRTYYYYMMDD`, whose fifth character is the
+    region letter. None when the file is not a readable PS2 ROM, which is not an error here: an
+    unidentifiable BIOS is simply never *preferred*.
+    """
+    try:
+        with path.open('rb') as fh:
+            table = fh.read(0x20000)        # the ROMDIR table is near the front; its data is not
+            i = table.find(b'RESET\0\0\0\0\0')
+            if i < 0:
+                return None
+            off, p = 0, i
+            while p + 16 <= len(table):
+                name = table[p:p + 10].rstrip(b'\0')
+                if not name:
+                    return None
+                if name == b'ROMVER':
+                    fh.seek(off)
+                    return ROM_REGIONS.get(fh.read(16).decode('ascii', 'replace')[4:5].upper())
+                off += (int.from_bytes(table[p + 12:p + 16], 'little') + 15) & ~15
+                p += 16
+    except OSError:
+        return None
+    return None
+
+
+def disc_region(c) -> str:
+    """'US' / 'EU' / 'JP' / … for the configured disc, or '' if nothing says.
+
+    The serial prefix decides it when there is one: `[game] region` is documented as free text, so it is
+    the fallback rather than the source.
+    """
+    if (r := SERIAL_REGIONS.get(c.serial[:4])):
+        return r
+    return REGION_WORDS.get((c.region or '').strip().upper(), '')
+
+
+def best_bios(c, files: list[Path] | None = None) -> Path | None:
+    """The BIOS to boot this disc with: one from the disc's own region, else the first by name."""
+    files = bios_files() if files is None else files
+    want = disc_region(c)
+    return next((f for f in files if want and bios_region(f) == want), files[0] if files else None)
+
+
+def ready_to_boot(c) -> str:
+    """Assert the ini keys without which PCSX2 will not boot the disc, and return a note for the caller.
+
+    Both of these are set on *every* launch, for the reason `enable_pine` is:
+
+    * `SetupWizardIncomplete` — a config that has never been through the first-run wizard interactively
+      makes `pcsx2-qt -- <iso>` open the five-page wizard and ignore the ISO entirely. The kit cannot see
+      that and used to report "booting <iso>" over the top of it, with `kit shot` then writing a
+      perfectly good PNG of the wizard, which an unattended agent happily ticks off as the title screen.
+      `pcsx2-qt -testconfig` does not clear the flag; only this does.
+    * `[Filenames] BIOS` — empty, it starts an emulator that cannot boot anything. Worse, a BIOS from the
+      wrong region boots *fine* and runs the machine at the wrong refresh rate, which quietly poisons
+      every frame-timing measurement taken against it. The kit already knows the disc's region, so it
+      prefers a BIOS that matches; a copy's ini is the kit's to correct, while the user's own choice is
+      left alone with a note.
+    """
+    ini = ini_path()
+    _ini_set(ini, 'UI', 'SetupWizardIncomplete', 'false')
+    d = bios_dir()
+    files = bios_files(d)
+    if not files:
+        raise SystemExit(f'no PS2 BIOS in {d}\nPCSX2 cannot boot a disc without one — dump your own '
+                         "console's BIOS into that directory. (`kit doctor` checks this too.)")
+    want = disc_region(c)
+    have = _ini_section(ini, 'Filenames').get('BIOS', '')
+    cur = next((f for f in files if f.name == have), None)
+    if cur is not None and (not want or bios_region(cur) in (None, want)):
+        return ''
+    if cur is not None and not _inst():
+        return (f'note: BIOS {cur.name} is {bios_region(cur)} and the disc is {want} — the wrong region '
+                'boots fine and runs at the wrong refresh rate, which poisons frame timing')
+    pick = best_bios(c, files)
+    _ini_set_in(ini, 'Filenames', [('BIOS', pick.name)])
+    region = bios_region(pick)
+    return (f'BIOS {pick.name}' + (f' ({region})' if region else ' (region unknown)')
+            + ('' if not have else f', was {have or "unset"}'))
+
+
 def enable_pine(slot: int) -> None:
     """Turn PINE on in this instance's ini. Called before every launch — see the module docstring."""
     ini = ini_path()
@@ -246,12 +366,13 @@ def start(args: list[str] | None = None) -> int | None:
         # The user's own emulator must never pick up a kit pad as its controller 1.
         env = plat.user_pad_env(c.instances)
     enable_pine(c.pine_slot + int(n or 0))
+    note = ready_to_boot(c)
     log = c.ctx('logs', f'pcsx2{n or 0}.log')
     argv = plat.pcsx2_cmd(c.pcsx2) + plat.instance_args(n) + list(args or []) + ['--', str(iso)]
     pid = plat.spawn_detached(argv, log=log, env=env)
     _pid_file().write_text(f'{pid}\n')
     print(f'PCSX2{" copy " + n if n else ""} starting (pid {pid}), PINE slot {c.pine_slot + int(n or 0)}, '
-          f'booting {iso.name}\nlog: {log}')
+          f'booting {iso.name}' + (f'\n  {note}' if note else '') + f'\nlog: {log}')
     return None
 
 

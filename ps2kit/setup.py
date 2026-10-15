@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ps2kit import emu
 from ps2kit import ghidra as gh
 from ps2kit import platform_ as plat
 from ps2kit.cli import parser
@@ -100,11 +101,10 @@ def ee_extension(home: Path) -> bool:
 
 
 def bios_present() -> tuple[bool, Path | None]:
-    d = plat.pcsx2_config_dir() / 'bios'
-    if not d.is_dir():
-        return False, d
-    return any(f.suffix.lower() in ('.bin', '.rom0', '') and f.stat().st_size > 1 << 20
-               for f in d.iterdir() if f.is_file()), d
+    """(is there one, where the emulator looks). The directory comes from `[Folders] Bios` rather than a
+    path the kit makes up, because that is the one PCSX2 reads `[Filenames] BIOS` against."""
+    d = emu.bios_dir()
+    return bool(emu.bios_files(d)), d
 
 
 # --- the wizard ---------------------------------------------------------------
@@ -254,10 +254,20 @@ def doctor(argv: list[str]) -> int:
         bad += 1
     have_bios, bdir = bios_present()
     if not have_bios:
-        _say(BAD, 'no PS2 BIOS', f'Dump your own console\'s BIOS into {bdir}.')
+        _say(BAD, 'no PS2 BIOS', f'Dump your own console\'s BIOS into {bdir}.\n'
+                                 '        Without one PCSX2 starts and boots nothing, which looks like a '
+                                 'disc problem rather than a missing BIOS.')
         bad += 1
     else:
-        _say(OK, f'BIOS present ({bdir})')
+        # Which BIOS, not just "there is one": a wrong-region BIOS boots fine and runs the machine at the
+        # wrong refresh rate, so every frame-timing number measured against it is quietly wrong.
+        pick = emu.best_bios(c)
+        got, want = emu.bios_region(pick), emu.disc_region(c)
+        _say(OK, f'BIOS: {pick.name} ({got or "region unknown"}) in {bdir}')
+        if want and got and got != want:
+            _say(WARN, f'no {want} BIOS in {bdir} — {pick.name} is {got}',
+                 'A wrong-region BIOS boots the disc anyway, at the wrong refresh rate. Every frame\n'
+                 '        count taken against it is off by that ratio.')
     running = next((pids for n in plat.PCSX2_IMAGES if (pids := plat.pids_named(n))), [])
     _say(OK if running else WARN, f'PCSX2 running (pid {running[0]})' if running else 'PCSX2 not running',
          '' if running else 'Start it with `kit pcsx2 start` when you want live captures.')

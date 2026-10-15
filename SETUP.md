@@ -206,6 +206,14 @@ You do **not** need to enable PINE by hand. PCSX2 rewrites its ini on exit, so t
 `EnablePINE` in the ini before every launch it manages. (If you want it on for your own manual
 sessions too: Settings → Advanced → Enable PINE.)
 
+Two more keys are asserted the same way, on every managed launch, and for the same reason. `[UI]
+SetupWizardIncomplete = false`, because a config that has never been through the first-run wizard
+interactively makes PCSX2 open the wizard and ignore the disc on the command line — which the kit cannot
+see, so it would report "booting <iso>" over the top of it. And `[Filenames] BIOS`, filled from your BIOS
+folder if it is empty, preferring an image whose own region matches the disc's; with no image there at all
+the launch is refused rather than started. Running the wizard through once yourself is still the simplest
+way to get a config that works for your own sessions too.
+
 **Check:** the game boots to its title screen in PCSX2 and runs at full speed, and
 `Select-String EnablePINE "$env:USERPROFILE\Documents\PCSX2\inis\PCSX2.ini"` finds the key once the
 kit has launched it in step 7.

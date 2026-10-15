@@ -903,6 +903,25 @@ LAUNCHED: list[tuple[list[str], object, dict]] = []
 ALIVE: set[int] = set()
 
 
+def fake_bios(path: Path, region: str = 'A', size: int = 2 << 20) -> Path:
+    """A minimal PS2 ROM whose own ROMVER says this region ('A' USA, 'E' Europe, 'J' Japan).
+
+    Laid out the way a real image is, because a parser proved against a shape of its own invention is
+    proved against nothing: a ROMDIR table of 16-byte records (name[10], extinfo size, data size), each
+    record's data following in table order, 16-byte aligned, from offset 0. RESET's data is first, so the
+    table itself starts at 0x10 — which is where the real `RESET` name is found too.
+    """
+    def rec(name: bytes, n: int) -> bytes:
+        return name.ljust(10, b'\0') + (0).to_bytes(2, 'little') + n.to_bytes(4, 'little')
+
+    buf = bytearray(size)
+    buf[0x10:0x40] = rec(b'RESET', 0x10) + rec(b'ROMDIR', 0x30) + rec(b'ROMVER', 0x10)
+    buf[0x40:0x50] = f'0200{region}C20040614\n\0'.encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(buf)
+    return path
+
+
 def emu_env(inst: str = '') -> FakeCfg:
     """Patch out every way `emu` could touch the real machine: no PCSX2, no pad, no spawning."""
     c = use_cfg(FakeCfg(WORK / 'emu'))
@@ -922,6 +941,10 @@ def emu_env(inst: str = '') -> FakeCfg:
     own.mkdir(parents=True, exist_ok=True)
     if not (own / 'PCSX2.ini').exists():
         (own / 'PCSX2.ini').write_text(INI)
+    # A launch needs a BIOS the ini can name, exactly as a real one does ([Folders] Bios = bios above).
+    us = PLAT.pcsx2_config_dir('') / 'bios' / 'SCPH-70012.bin'
+    if not us.exists():
+        fake_bios(us, 'A')
     return c
 
 
@@ -958,6 +981,64 @@ def _():
     assert EMU._ini_get(ini, 'EnablePINE') == ''
     out_of(EMU.start)
     assert EMU._ini_get(ini, 'EnablePINE') == 'true', 'setting it once, by hand, is not enough'
+
+
+@check('a launch clears the first-run wizard, because PCSX2 would open it and ignore the disc')
+def _():
+    emu_env()
+    ini = EMU.ini_path()
+    _, out, _ = out_of(EMU.start)
+    assert EMU._ini_get(ini, 'SetupWizardIncomplete') == 'false', \
+        'the wizard ignores the ISO entirely, and the kit reports it as booting the game'
+    assert 'booting disc.iso' in out
+    EMU._ini_set(ini, 'UI', 'SetupWizardIncomplete', 'true')   # a fresh config, or PCSX2 rewriting it
+    out_of(EMU.start)
+    assert EMU._ini_get(ini, 'SetupWizardIncomplete') == 'false', 'asserted on every launch, like PINE'
+
+
+@check('a launch names a BIOS to boot with, preferring the disc region, and refuses with none at all')
+def _():
+    c = emu_env()
+    ini = EMU.ini_path()
+    bios = EMU.bios_dir()
+    eu = fake_bios(bios / 'SCPH-77008.bin', 'E')
+    assert EMU.bios_region(eu) == 'EU' and EMU.bios_region(bios / 'SCPH-70012.bin') == 'US'
+    (bios / 'SCPH-70012.nvm').write_bytes(b'\0' * 1024)
+    assert [f.name for f in EMU.bios_files(bios)] == ['SCPH-70012.bin', 'SCPH-77008.bin'], \
+        "PCSX2's own .nvm and .mec companions live here too, and are not BIOSes"
+
+    # Nothing named yet: an empty [Filenames] BIOS starts an emulator that cannot boot anything.
+    EMU._ini_del(ini, 'BIOS')            # an earlier launch in this file already named one
+    assert EMU._ini_section(ini, 'Filenames').get('BIOS', '') == ''
+    _, out, _ = out_of(EMU.start)
+    assert EMU._ini_section(ini, 'Filenames')['BIOS'] == 'SCPH-70012.bin', 'SLUS-12345 is a US disc'
+    assert 'BIOS SCPH-70012.bin (US)' in out
+
+    # The user's own wrong-region choice stands, with the reason it matters said out loud.
+    EMU._ini_set_in(ini, 'Filenames', [('BIOS', 'SCPH-77008.bin')])
+    _, out, _ = out_of(EMU.start)
+    assert EMU._ini_section(ini, 'Filenames')['BIOS'] == 'SCPH-77008.bin', "their config, their choice"
+    assert 'is EU and the disc is US' in out and 'frame timing' in out
+
+    # A copy's ini is the kit's, so there the mismatch is corrected instead of narrated.
+    os.environ['KIT_PCSX2'] = '6'
+    try:
+        out_of(EMU.copy_config, 6)
+        EMU._ini_set_in(EMU.ini_path(), 'Filenames', [('BIOS', 'SCPH-77008.bin')])
+        EMU._pad_pid_file().write_text('4243\n')
+        ALIVE.add(4243)
+        _, out, _ = out_of(EMU.start)
+        assert EMU._ini_section(EMU.ini_path(), 'Filenames')['BIOS'] == 'SCPH-70012.bin'
+    finally:
+        ALIVE.discard(4243)
+        os.environ.pop('KIT_PCSX2', None)
+
+    # And an emulator that can boot nothing says so instead of starting.
+    for f in EMU.bios_files(bios):
+        f.unlink()
+    e = raises(SystemExit, EMU.start)
+    assert f'no PS2 BIOS in {bios}' in str(e) and 'dump your own' in str(e).lower()
+    assert len(LAUNCHED) == 3, 'it refused before spawning, not after'
 
 
 @check("the user's own emulator boots the disc after a -- and ignores every kit pad")
