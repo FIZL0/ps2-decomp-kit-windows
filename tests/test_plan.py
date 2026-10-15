@@ -298,9 +298,9 @@ def test_audit():
 
 # --- the hooks ----------------------------------------------------------------
 
-def hook(payload, *args):
+def hook(payload, *args, cwd=None):
     r = subprocess.run([sys.executable, str(ROOT / 'ps2kit/hooks/guard.py'), *args],
-                       input=json.dumps(payload), capture_output=True, text=True)
+                       input=json.dumps(payload), capture_output=True, text=True, cwd=cwd)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -325,6 +325,43 @@ def test_guard():
     eq(rc, 0, 'kit check is allowed')
     check('3600000' in out, 'and its Bash timeout is raised, so a cold build is not killed at two minutes',
           out[:400])
+
+    # a big binary container under the private root: cracking its format is all header reads, and the
+    # bounded ones have to go through. Run the hook with its cwd there, the way a session's would be.
+    with tempfile.TemporaryDirectory() as tmp:
+        big = Path(tmp) / 'context/iso/BIG.BIN'
+        big.parent.mkdir(parents=True)
+        big.write_bytes(b'\0' * (700 * 1024))
+        for cmd in ('xxd -l 512 context/iso/BIG.BIN',
+                    'od -A x -N 256 -t x1z context/iso/BIG.BIN',
+                    'dd if=context/iso/BIG.BIN bs=1 count=256 status=none',
+                    'head -c 512 context/iso/BIG.BIN | xxd',
+                    'xxd context/iso/BIG.BIN | head -40'):
+            rc, out = hook({'tool_name': 'Bash', 'tool_input': {'command': cmd}}, cwd=tmp)
+            eq(rc, 0, f'a capped header read is allowed: {cmd}')
+        for cmd in ('xxd context/iso/BIG.BIN',
+                    'od -A x -t x1z context/iso/BIG.BIN',
+                    'cat context/iso/BIG.BIN',
+                    'xxd -l 16 kit.toml.example; xxd context/iso/BIG.BIN'):
+            rc, out = hook({'tool_name': 'Bash', 'tool_input': {'command': cmd}}, cwd=tmp)
+            eq(rc, 2, f'the same tool with no cap is still refused: {cmd}')
+            check('| head' in out, 'and the refusal names the cap that always works', out[:400])
+
+        # …and a screenshot is not a dump at all: reading it is the point of taking it, and moving or
+        # resizing one puts nothing in the conversation either.
+        shot = Path(tmp) / 'context/shots/title.png'
+        shot.parent.mkdir(parents=True)
+        shot.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * (700 * 1024))
+        rc, out = hook({'tool_name': 'Read', 'tool_input': {'file_path': str(shot)}}, cwd=tmp)
+        eq(rc, 0, 'Read of a screenshot is allowed whatever it weighs')
+        for cmd in ('cp context/shots/title.png /tmp/t.png', 'ls -l context/shots/title.png',
+                    'magick context/shots/title.png -resize 50% small.png'):
+            rc, out = hook({'tool_name': 'Bash', 'tool_input': {'command': cmd}}, cwd=tmp)
+            eq(rc, 0, f'a command that only names the file is allowed: {cmd}')
+        rc, out = hook({'tool_name': 'Bash', 'tool_input': {'command': 'cat context/shots/title.png'}},
+                       cwd=tmp)
+        eq(rc, 2, 'streaming a PNG to stdout is still refused')
+        check('Read' in out, 'and the refusal names Read, not a code-reading command', out[:400])
 
 
 def test_inbox():

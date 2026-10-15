@@ -9,8 +9,16 @@ What it does, and why each one earned its place:
 **A whole-file read of a decompilation dump.** `kit ghidra` writes one C file per program, and for a PS2
 game that is 5–20 MB. A `Read` without `offset`/`limit`, or a `cat`/`grep` without a cap, puts all of it in
 the conversation — which is then re-read on every following turn, so the session is over. Blocked, with the
-three cheap ways to get the same answer: `kit fn <addr>` for one function, `kit xref <addr>` for its
-callers and callees, `Read` with `offset`+`limit`, or a capped grep.
+cheap ways to get the same answer: append `| head -<n>` to cap any command's output, read a binary header
+with a tool that carries its own cap (`xxd -l`, `od -N`, `dd count=`, `head -c`), or, for code, `kit fn
+<addr>` for one function, `kit xref <addr>` for its callers and callees, `Read` with `offset`+`limit`, a
+capped grep.
+
+Two things that merely *look* like that read are not: an image, which `Read` renders rather than pastes —
+`kit shot` writes PNGs into the same directory, and looking at one is the point of taking it — and a
+command that names a big file without reading it (`cp`, `mv`, `ls`, `magick … -resize`), which puts
+nothing in the conversation at all. Both used to be refused, which walled off the task "look at the
+screenshot" completely.
 
 **`pgrep -f` / `pkill -f`.** With `-f`, pgrep matches against whole command lines — including the command line
 of the shell that is doing the searching, because the pattern is literally in it. So `pgrep -f pcsx2` always
@@ -59,9 +67,34 @@ LOOP = re.compile(r'\b(while|until)\b[\s\S]{0,120}?\bdo\b[\s\S]{0,400}?\b(pgrep|
                   r'tail\s+-f\s+--pid')
 # A long sleep: only a problem next to something that finishes on its own and notifies.
 SLEEPY = re.compile(r'\bsleep\s+([3-9]\d|\d{3,})')
-# `cat x`, `grep pat x`, `head -c big x`… with no cap on the output
+# `cat x`, `grep pat x`, `head -c big x`… with no cap on the output. Anything behind a pipe caps whatever
+# fed it, so this one is judged over the whole command line.
 CAPPED = re.compile(KIT + r'\s+(fn|xref|dis|data)\b|\|\s*(head|tail|wc|sed\b)|'
                     r'\bgrep\b[^|]*\s-[a-zA-Z]*[mcl]|\bwc\b|\bsed\s+-n|\bhead\s+-|\btail\s+-')
+# The byte-slice tools carry their own cap, which is how you read a binary header: `xxd -l 512 f`,
+# `od -N 256 f`, `dd … count=256`, `head -c 512 f`. The cap has to belong to the command that opens the
+# file, so this one is matched inside that command's own pipeline segment only (`_segment`): a capped
+# `xxd` in another segment or another statement caps its own output, not this read. Every alternative
+# needs the flag *and* a digit, so a bare `xxd context/iso/BIG.BIN` is still uncapped.
+SELF_CAPPED = re.compile(r'\bxxd\b[^|;&\n]*?\s-(?:l\s*\d|-len(?:gth)?[= ]\s*\d)|'
+                         r'\bod\b[^|;&\n]*?\s-(?:N\s*\d|-read-bytes[= ]\s*\d)|'
+                         r'\bdd\b[^|;&\n]*?\scount=\d|'
+                         r'\bhead\b[^|;&\n]*?\s-(?:c\s*\d|-bytes[= ]\s*\d)')
+# An image is not a dump: `kit shot` writes PNGs into the private directory, and looking at one is the
+# whole point of taking it. `Read` renders an image instead of pasting its bytes, so the cost this guard
+# exists to prevent does not arise — a screenshot is read whole or not at all. (A *shell* command that
+# streams a PNG to stdout is still refused: that one does paste the bytes. See `_is_dump(image_ok=…)`.)
+IMAGES = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tga', '.ppm')
+# Commands that take a path and put none of its contents in the conversation: moving a screenshot out of
+# the way, measuring a dump, resizing a PNG. The guard is about output volume, so gating these bought
+# nothing and walled off `cp context/shots/a.png b.png`, `magick … -resize` and even `ls` on a path that
+# merely *looked* big. Matched against the token's own pipeline segment, and deliberately a list rather
+# than "anything that is not a reader": an unknown command still has to carry a cap.
+# than "anything that is not a reader": an unknown command still has to carry a cap, and the ones that
+# *can* stream a file to stdout (`tar cf -`, `gzip -c`, `7z e -so`, `diff`, `cmp`) are left out of it.
+NO_READ = re.compile(r'^\s*(?:sudo\s+)?(cp|mv|rm|ln|mkdir|rmdir|touch|chmod|chown|ls|stat|file|du|df|'
+                     r'basename|dirname|realpath|readlink|sha\d+sum|md5sum|magick|convert|identify|'
+                     r'ffmpeg|optipng|pngcrush|rsync|install|open|xdg-open)\b')
 
 
 def _cfg():
@@ -83,8 +116,13 @@ def _dump_paths() -> tuple[str, str]:
     return f'{base}/decomp', base
 
 
-def _is_dump(path: str) -> str | None:
-    """Why reading all of `path` is a bad idea, or None."""
+def _is_dump(path: str, image_ok: bool = False) -> str | None:
+    """Why reading all of `path` is a bad idea, or None.
+
+    `image_ok` is for `Read`, which renders an image rather than pasting its bytes: a screenshot out of
+    `kit shot` is then not a dump at all, whatever it weighs. A shell command naming the same PNG gets
+    `image_ok=False`, because `cat` on it really would paste the bytes.
+    """
     if not path:
         return None
     decomp, private = _dump_paths()
@@ -95,21 +133,36 @@ def _is_dump(path: str) -> str | None:
     in_decomp = f'{os.sep}{name}{os.sep}' in s or s.startswith(decomp) or f'/{name}/' in path
     if in_decomp and full.suffix in ('.c', '.h', '.txt', '.csv', '.asm', '.s', ''):
         return 'a decompilation dump'
+    if image_ok and full.suffix.lower() in IMAGES:
+        return None
     priv = Path(private).name
     in_private = f'{os.sep}{priv}{os.sep}' in s or f'/{priv}/' in path
     if in_private:
         try:
             if full.stat().st_size > BIG:
-                return f'{full.stat().st_size // 1024} KB of generated data'
+                kb = f'{full.stat().st_size // 1024} KB'
+                return (f'{kb} of image data' if full.suffix.lower() in IMAGES
+                        else f'{kb} of generated data')
         except OSError:
             return None
     return None
 
 
-HOW = ('Use `kit fn <addr>` for one function, `kit xref <addr>` for its callers and callees '
-       '(`--similar` for look-alikes), `Read` with offset+limit, or a capped grep (`grep -m5`, `grep -c`, '
-       '`| head`). Reading it whole puts megabytes in the conversation, which is then re-read on every turn '
-       'for the rest of the session.')
+HOW = ('It is not off limits — cap the output and the same command is allowed. Appending `| head -40` '
+       '(any n) to a Bash command caps it and satisfies this guard, whatever the file is; for a binary '
+       'header, `xxd -l 512`, `od -N 256`, `dd count=256` and `head -c 512` carry their own cap. For code, '
+       '`kit fn <addr>` gives one function, `kit xref <addr>` its callers and callees (`--similar` for '
+       'look-alikes), `Read` takes offset+limit, and a grep can be capped (`grep -m5`, `grep -c`). Reading '
+       'it whole puts megabytes in the conversation, which is then re-read on every turn for the rest of '
+       'the session.')
+
+
+def _segment(cmd: str, pos: int) -> str:
+    """The one pipeline segment of `cmd` holding offset `pos`: where a tool's own cap flag has to sit."""
+    seps = '|;&\n'
+    start = max((cmd.rfind(c, 0, pos) for c in seps), default=-1) + 1
+    ends = [i for i in (cmd.find(c, pos) for c in seps) if i >= 0]
+    return cmd[start:min(ends)] if ends else cmd[start:]
 
 
 def decide(ev: dict) -> tuple[int, str, dict | None]:
@@ -120,7 +173,7 @@ def decide(ev: dict) -> tuple[int, str, dict | None]:
         return 0, '', None
 
     if tool == 'Read':
-        why = _is_dump(str(i.get('file_path', '')))
+        why = _is_dump(str(i.get('file_path', '')), image_ok=True)
         if why and not i.get('limit') and not i.get('offset'):
             return 2, f'That file is {why}. {HOW}', None
         return 0, '', None
@@ -132,9 +185,19 @@ def decide(ev: dict) -> tuple[int, str, dict | None]:
         return 0, '', None
 
     # a dump named in a shell command with nothing capping the output
-    for tok in re.findall(r'[\w./@~-]+', cmd):
-        if _is_dump(tok) and not CAPPED.search(cmd):
-            return 2, f'`{tok}` is too big to read whole. {HOW}', None
+    for m in re.finditer(r'[\w./@~-]+', cmd):
+        tok = m.group()
+        if not _is_dump(tok):
+            continue
+        seg = _segment(cmd, m.start())
+        if CAPPED.search(cmd) or SELF_CAPPED.search(seg) or NO_READ.match(seg):
+            continue
+        if Path(tok).suffix.lower() in IMAGES:
+            return 2, (f'`{tok}` is an image, and piping it to stdout would paste its bytes into the '
+                       'conversation. `Read` it instead — the guard allows reading an image whole, which '
+                       'is the point of taking it — and `cp`, `mv`, `ls`, `file` and `magick` on it are '
+                       'not gated either.'), None
+        return 2, f'`{tok}` is too big to read whole. {HOW}', None
 
     # polling loops around test runs and background tasks
     watching = bool(re.search(r'/tasks/\w+\.output|BashOutput', cmd)) or bool(TEST_CMDS.search(cmd))
@@ -210,12 +273,59 @@ def wrapper(kill: bool, argv: list[str]) -> int:
 # --- self-test -----------------------------------------------------------------
 
 def self_test() -> int:
+    # Two real oversized files under a `context/` of their own: the size rule stats what it is given, so
+    # the screenshot cases need bytes on disk rather than a path that merely looks right.
+    import tempfile
+    tmp = tempfile.TemporaryDirectory(prefix='kit-guard-')
+    priv = Path(tmp.name) / 'context'
+    (priv / 'shots').mkdir(parents=True)
+    (priv / 'states').mkdir(parents=True)
+    BIG_PNG = priv / 'shots' / 'title.png'
+    BIG_BIN = priv / 'states' / 'ram.bin'
+    BIG_PNG.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * BIG)
+    BIG_BIN.write_bytes(b'\0' * (BIG + 1))
     cases = [
         ({'tool_name': 'Read', 'tool_input': {'file_path': 'context/decomp/game.c'}}, 2),
         ({'tool_name': 'Read', 'tool_input': {'file_path': 'context/decomp/game.c', 'limit': 80}}, 0),
         ({'tool_name': 'Read', 'tool_input': {'file_path': 'ps2kit/plan.py'}}, 0),
         ({'tool_name': 'Bash', 'tool_input': {'command': 'cat context/decomp/game.c'}}, 2),
         ({'tool_name': 'Bash', 'tool_input': {'command': 'grep -m3 foo context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'cat context/decomp/game.c | head -40'}}, 0),
+        # the byte-slice tools: the flag *is* the cap, so each tool's bare form is still refused
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'xxd -l 512 context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'xxd -s 0x100 -l512 context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'xxd --length=512 context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'xxd context/decomp/game.c'}}, 2),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'xxd -g 1 context/decomp/game.c'}}, 2),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'xxd -l context/decomp/game.c'}}, 2),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'od -N 256 -t x1z context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'od -A x -N256 context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'od --read-bytes=256 context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'od -A x -t x1 context/decomp/game.c'}}, 2),
+        ({'tool_name': 'Bash',
+          'tool_input': {'command': 'dd if=context/decomp/game.c bs=1 count=256 status=none'}}, 0),
+        ({'tool_name': 'Bash',
+          'tool_input': {'command': 'dd if=context/decomp/game.c of=/tmp/copy.bin status=none'}}, 2),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'head -c 512 context/decomp/game.c'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': 'head --bytes=512 context/decomp/game.c'}}, 0),
+        # a cap belonging to some other command in the line cannot bless this read
+        ({'tool_name': 'Bash',
+          'tool_input': {'command': 'xxd -l 16 small.bin; xxd context/decomp/game.c'}}, 2),
+        ({'tool_name': 'Bash',
+          'tool_input': {'command': 'xxd -l 16 small.bin && cat context/decomp/game.c'}}, 2),
+        ({'tool_name': 'Bash',
+          'tool_input': {'command': 'xxd -l 16 small.bin | xxd context/decomp/game.c'}}, 2),
+        # a screenshot is read whole on purpose; only streaming its bytes to stdout is refused
+        ({'tool_name': 'Read', 'tool_input': {'file_path': str(BIG_PNG)}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'cp {BIG_PNG} /tmp/a.png'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'magick {BIG_PNG} -resize 50% /tmp/s.png'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'ls -l {BIG_PNG}'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'cat {BIG_PNG}'}}, 2),
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'base64 {BIG_PNG}'}}, 2),
+        # a non-image dump keeps the old rule, whoever names it
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'cp {BIG_BIN} /tmp/ram.bin'}}, 0),
+        ({'tool_name': 'Bash', 'tool_input': {'command': f'cat {BIG_BIN}'}}, 2),
+        ({'tool_name': 'Read', 'tool_input': {'file_path': str(BIG_BIN)}}, 2),
         ({'tool_name': 'Bash', 'tool_input': {'command': 'sleep 120; pgrep -f kit check'}}, 2),
         ({'tool_name': 'Bash', 'tool_input': {'command': 'while true; do sleep 60; pgrep -x claude; done'}}, 2),
         ({'tool_name': 'Bash', 'tool_input': {'command': 'while read l; do echo $l; done < f'}}, 0),
@@ -237,6 +347,7 @@ def self_test() -> int:
     if not upd or '--pkill' not in upd.get('command', ''):
         bad += 1
         print(f'FAIL pkill -f was not rewritten: {upd}')
+    tmp.cleanup()
     print('guard self-test: ' + ('ok' if not bad else f'{bad} failure(s)'))
     return 1 if bad else 0
 
