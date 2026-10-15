@@ -80,7 +80,6 @@ from ps2kit import platform_ as plat
 SLOTS_DIR = ROOT.parent / f'{ROOT.name}-slots'
 TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
 ANY_TASK = re.compile(r'^- \[.\] \*\*([^*\s]+)\*\*')
-PLAIN = re.compile(r'(plan|research/journal)/.*\.md')  # text whose merge conflicts the runner joins itself
 WEEKLY_MAX = 90  # % of the account's 7-day usage; at or past it, no new task starts unless --force
 
 PROMPT = """Unattended run: nobody will answer questions, so never ask one — decide, write down why, and go on.
@@ -442,11 +441,73 @@ def start(n: int, task, branch: str, model: str, idle: int, slots: int, mux: Mux
 MERGE = threading.Lock()  # one merge into the default branch at a time
 
 
+def joinable(f: str) -> bool:
+    """True when the runner may join both sides of a conflict in `f` itself, rather than ask a human.
+
+    Line-oriented text, where a line is a whole record and two agents each added records: the task list
+    and its archive, the journal, and the oracle's address list.
+
+    Prose stays off the list even where it is only ever appended to, `PLAN.md`'s code map included. A
+    union joins *lines*, and two sides that both reflowed one paragraph give it no line to agree on, so
+    it stitches them into something that reads like a sentence and is not one — a tail left stranded in
+    the middle of a bullet, which a reader believes. The port repo had to go back and repair exactly that
+    (openmx 10dcc05) after one such merge. A paragraph needs reading, so it goes to whoever can read it.
+
+    Off config, not off this repo's layout: `[paths]` and `[oracle] addresses` all move.
+    """
+    c = cfg(False)
+
+    def rel(p) -> str | None:
+        p = Path(p)
+        return str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else None
+
+    if f == rel(c.oracle_file):
+        return True
+    return any(f.startswith(f'{d}/') and f.endswith('.md')
+               for d in (rel(c.plan), rel(c.journal)) if d)
+
+
+def addresses(text: str, where: str) -> str | None:
+    """The oracle's address list after a union join: drop a line both sides added, refuse a real clash.
+
+    An address list is append-only, so joining both sides is right — while the two sides agree. The
+    same name at two different addresses is the case where they do not, and nothing downstream picks
+    between them: `Kit::addr` in Rust and `oracle.entries` here both take the first line that matches,
+    in file order. Resolving it by picking a side would point the oracle at whichever worktree the run
+    merged first and say nothing about it — a wrong-address oracle call, which is the failure this kit
+    exists to catch. So that one goes to a human instead. `kit oracle add` refuses the same clash; a
+    merge must not become the way around it.
+    """
+    from ps2kit import oracle as O
+    try:
+        rows = O.parse(text, where)
+    except ValueError as e:
+        log(f'{e}')
+        return None
+    at: dict[tuple[str, str], int] = {}
+    for name, prog, addr, _note in rows:
+        if at.setdefault((name, prog), addr) != addr:
+            log(f'{where}: both sides name {name}{f" in {prog}" if prog else ""} and disagree about its '
+                f'address ({at[(name, prog)]:#x} / {addr:#x}) — a human picks that one')
+            return None
+    kept, seen = [], set()
+    for line in text.split('\n'):
+        entry = ' '.join(line.partition('#')[0].split())
+        if entry and entry in seen:   # the same name and address added on both sides
+            continue
+        seen.add(entry)
+        kept.append(line)
+    return '\n'.join(kept)
+
+
 def union(files: list[str], tid: str, branch: str) -> bool:
-    """Join both sides of a conflict in plan/ and journal markdown: two agents both added lines, and both
-    sets belong. Then drop a task line that came out twice, and any TODO line whose task DONE.md already has.
+    """Join both sides of a conflict in every file `joinable` allows: two agents both added lines, and
+    both sets belong. Then drop a task line that came out twice, any TODO line whose task DONE.md already
+    has, and — in the address list, which cannot be joined blind — a name both sides gave the same address.
     """
     from ps2kit import plan as P
+    orel = str(Path(cfg(False).oracle_file).relative_to(ROOT)) \
+        if Path(cfg(False).oracle_file).is_relative_to(ROOT) else None
     for f in sorted(files, key=lambda f: not f.endswith('DONE.md')):  # DONE.md first: TODO.md reads it
         sides = []
         for stage in (2, 1, 3):  # ours, base, theirs
@@ -475,6 +536,8 @@ def union(files: list[str], tid: str, branch: str) -> bool:
                     seen[k] = len(kept)
                 kept.append(l)
             text = '\n'.join(kept)
+        elif f == orel and (text := addresses(text, f)) is None:
+            return False
         (ROOT / f).write_text(text, encoding='utf-8')
         git('add', f)
     return True
@@ -499,7 +562,7 @@ def merge(tid: str, branch: str) -> str | None:
         try:
             if git('merge', '--no-edit', f'task/{tid}').returncode:
                 files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-                if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tid, branch):
+                if [f for f in files if not joinable(f)] or not union(files, tid, branch):
                     git('merge', '--abort')
                     return f'conflicts in {", ".join(files)}'
                 git('commit', '-q', '--no-edit')

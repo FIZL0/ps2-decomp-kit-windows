@@ -409,6 +409,33 @@ def test_runner_picking():
     eq(R.pick({}, {t[0] for t in ts}, 'd', 'main'), None, 'nothing left once everything has been tried')
 
 
+def test_runner_union():
+    print('run: which merge conflicts the runner resolves itself')
+    from ps2kit import runner as R
+    for f in ('plan/TODO.md', 'plan/DONE.md', 'research/journal/2026-01-01-t7-walker/README.md',
+              'research/oracle.txt'):
+        check(R.joinable(f), f'{f} is a list of records, so the run may join both sides')
+    # PLAN.md is the interesting no: append-only, and still not joinable, because a union of two
+    # reflowed paragraphs strands half a sentence inside a bullet instead of failing.
+    for f in ('PLAN.md', 'AGENT.md', 'README.md', 'docs/WORKFLOW.md', 'crates/game-sim/src/tick.rs',
+              'plan/notes.txt', 'kit.toml.example'):
+        check(not R.joinable(f), f'{f} needs reading, so it goes to a human')
+
+    # The address list is the one joinable file where both sides can be *wrong together*: nothing
+    # downstream picks between two addresses for one name, so a clash must not be resolved here.
+    both = 'angle 0x1004c0 the stick angle\nspeed 0x100500\n'
+    eq(R.addresses(both + 'speed 0x100500\n', 'o.txt'), both,
+       'a name both sides added at the same address is kept once')
+    eq(R.addresses('angle 0x1004c0\nangle 0x2004c0\n', 'o.txt'), None,
+       'the same name at two addresses is left for a human, never picked')
+    eq(R.addresses('angle main 0x1004c0\nangle menu 0x1004c0\n', 'o.txt').count('angle'), 2,
+       'the same name in two overlays is two addresses and both stay')
+    eq(R.addresses('angle\n', 'o.txt'), None, 'a line that is not an address stops the join too')
+    kept = R.addresses('# the stick\nangle 0x1004c0\n\n# the bike\nspeed 0x100500\n', 'o.txt')
+    eq(kept, '# the stick\nangle 0x1004c0\n\n# the bike\nspeed 0x100500\n',
+       'comments and blank lines survive the join (a note belongs to the line under it)')
+
+
 def test_stop_hook_never_crashes():
     print('run: the Stop hook that ends an idle session')
     for payload in ('{}', 'garbage', '{"transcript_path": "/nonexistent"}', '{"transcript_path": null}'):
@@ -431,7 +458,7 @@ def test_cli_help():
 def main() -> int:
     for t in (test_plan_roundtrip, test_plan_index_and_sections, test_brief, test_shipped_backlog,
               test_journal, test_check_summary, test_audit, test_guard, test_inbox, test_runner_picking,
-              test_stop_hook_never_crashes, test_cli_help):
+              test_runner_union, test_stop_hook_never_crashes, test_cli_help):
         t()
     print()
     if FAILED:

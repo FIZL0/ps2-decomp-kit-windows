@@ -35,19 +35,17 @@ def _hex(tok: str) -> int | None:
         return None
 
 
-def entries() -> list[tuple[str, str, int, str]]:
-    """The addresses file as (name, program, address, note) rows, in file order.
+def parse(text: str, where: str = 'addresses') -> list[tuple[str, str, int, str]]:
+    """The addresses file's text as (name, program, address, note) rows, in file order.
 
     One line per function: `name [program] 0xaddr [note]`. The program column is optional because a
     game with no overlays has only one, and strongly recommended for every other game: overlays share
     their addresses, so an address with no program beside it is not an address. A note is either the
-    rest of the line or the comment above it.
+    rest of the line or the comment above it. Anything else raises `ValueError` naming the line, so a
+    caller holding a merge or an edit in memory can decide what to do about it; `entries` just stops.
     """
-    path = cfg(False).oracle_file   # the addresses file stands on its own: readable before kit.toml exists
-    if not path.exists():
-        return []
     out, note = [], ''
-    for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+    for n, line in enumerate(text.splitlines(), 1):
         body, _, comment = line.partition('#')
         if not body.strip():
             note = comment.strip() or note
@@ -58,10 +56,21 @@ def entries() -> list[tuple[str, str, int, str]]:
         elif len(parts) >= 3 and (addr := _hex(parts[2])) is not None:
             prog, rest = parts[1], parts[3:]
         else:
-            raise SystemExit(f'{path}:{n}: want `name [program] 0xaddr [note]`, got {line.strip()!r}')
+            raise ValueError(f'{where}:{n}: want `name [program] 0xaddr [note]`, got {line.strip()!r}')
         out.append((parts[0], prog, addr, ' '.join(rest) or note))
         note = ''
     return out
+
+
+def entries() -> list[tuple[str, str, int, str]]:
+    """The addresses file as `parse` rows, or none at all while the file does not exist yet."""
+    path = cfg(False).oracle_file   # the addresses file stands on its own: readable before kit.toml exists
+    if not path.exists():
+        return []
+    try:
+        return parse(path.read_text(encoding='utf-8'), str(path))
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
 
 def cmd_list() -> int:

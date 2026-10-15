@@ -171,6 +171,14 @@ What to expect from a long run:
   working run, just a slower one.
 - Each agent works on `task/<ID>` in its own worktree, with its own build directory, so three can run
   tests at once. Merge them afterwards; conflicts are rare if tasks were picked for different files.
+- The conflicts that do happen are mostly two agents appending to the same list, so the run joins those
+  itself and says which files it joined: the task list and its archive, the journal, and the oracle's
+  address list — files where a line is a whole record and both sides' records belong. Anything else it
+  leaves alone, with the branch and the target untouched, and names the files in `LEFT FOR A HUMAN`.
+  Prose is on the "leaves alone" side on purpose, including `PLAN.md`'s code map: joining two reflowed
+  paragraphs line by line produces something that reads like a sentence and is not one. So is the
+  address list when the two sides give one name different addresses — the whole point of joining is
+  that both sides belong, and there exactly one of them is wrong.
 - No merge is pushed: a run moves work onto the shared branch locally and stops there, because whether
   that becomes the project's public history is yours to decide when you read it. What the run does push
   is the branch of any task whose merge it had to leave for a human — that branch is the one copy of
