@@ -8,6 +8,8 @@ exception on its own, so the properties here are the ones that would otherwise c
 
 * `disc` finds the sector stride instead of assuming it, derives the serial from SYSTEM.CNF, and refuses
   the wrong disc and compressed containers by name rather than guessing at them.
+* `setup` learns the serial, the boot ELF and the version off the disc rather than leaving them to be
+  typed in — and says so, instead of hiding a bug in itself behind "unreadable disc" advice.
 * `elf` reads by virtual address (with .bss zero-filled), round-trips what it writes, seeds an IRX with
   its own exports and prologues, and ranks a blob of real MIPS above a blob of noise while deriving the
   load address from the blob's own `jal`s.
@@ -29,12 +31,14 @@ import os
 import random
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 
 from ps2kit import decomp as D
 from ps2kit import disc as DISC
@@ -361,6 +365,28 @@ def _():
     p.write_bytes(bytes(0x20000))
     err = str(raises(DISC.DiscError, DISC.Disc, p))
     assert 'no ISO 9660 volume descriptor' in err and '2352/16' in err
+
+
+# --- setup.py, the one thing it reads off a disc ------------------------------
+
+@check('setup learns the serial, the boot ELF and the version from the disc and writes all three')
+def _():
+    # A subprocess with $KIT_CONFIG pointing into the temp directory, because that is the only way to
+    # let `setup` write a real kit.toml without going anywhere near the user's own. Via `kit` so the
+    # argument parsing and the command table are covered too.
+    home = WORK / 'setup'
+    home.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([sys.executable, str(REPO / 'kit'), 'setup', '--no-input', '--iso', str(iso())],
+                       cwd=str(REPO), capture_output=True, text=True, timeout=300,
+                       env={**os.environ, 'KIT_CONFIG': str(home)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    # The whole point: it says what it read rather than advising you to type the serial in yourself.
+    assert 'read the disc: SLUS-12345  boot SLUS_123.45  ver 1.00' in r.stdout, r.stdout
+    assert 'could not read SYSTEM.CNF' not in r.stdout, r.stdout
+    written = (home / 'kit.toml').read_text(encoding='utf-8')
+    assert 'serial = "SLUS-12345"' in written, written
+    assert 'version = "1.00"' in written, written
+    assert 'elf = "SLUS_123.45"' in written, written
 
 
 # --- elf.py -------------------------------------------------------------------
