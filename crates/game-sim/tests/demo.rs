@@ -1,6 +1,6 @@
 //! The port of the synthetic game, proved against the synthetic game.
 //!
-//! Unlike `crates/ps2-oracle/tests/game.rs`, nothing here needs a disc: `kit demo` generates the
+//! Unlike `crates/kit-oracle/tests/game.rs`, nothing here needs a disc: `kit demo` generates the
 //! program these tests call, so they run on a fresh checkout and in CI with nothing installed but a Rust
 //! toolchain and Python. If the demo is not there yet, the first test builds it.
 //!
@@ -21,13 +21,13 @@ use std::sync::OnceLock;
 
 use game_sim::demo;
 use ps2_float::F;
-use ps2_oracle::{skip, Ee, Kit};
+use kit_oracle::{skip, Ee, Kit, KitEe};
 
-/// Point `ps2-oracle` at the generated demo, building it first if it is missing.
+/// Point `kit-oracle` at the generated demo, building it first if it is missing.
 ///
 /// `Kit::load()` finds its config through `$KIT_ROOT`, which is process-wide, and Rust runs tests in
 /// threads of one process — so this happens exactly once, inside a `OnceLock`, and every test reads the
-/// environment only through this function's return value. (`crates/ps2-oracle/tests/loader.rs` solves the
+/// environment only through this function's return value. (`crates/kit-oracle/tests/loader.rs` solves the
 /// same problem the other way, by having a single test; either is fine, neither is optional.)
 fn demo_kit() -> Result<&'static PathBuf, &'static String> {
     static SETUP: OnceLock<Result<PathBuf, String>> = OnceLock::new();

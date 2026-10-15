@@ -105,12 +105,14 @@ committed, no game data. `context/` — everything game-derived, git-ignored.
 
 ### The port
 
-`crates/` by default, but this is yours to shape. The three that come with the kit:
+`crates/` by default, but this is yours to shape. What comes with the kit:
 
-- `ps2-float` — the PS2's arithmetic: EE FPU add/sub/mul/div/sqrt/madd, VU0 macro ops, the game's own
-  transcendentals. Everything in the simulation goes through this.
-- `ps2-oracle` — a small R5900 interpreter that runs one function from the game's own code so a test can
-  compare your port against it over thousands of inputs.
+- `ps2-float` (FIZL0/ps2-float, a tag-pinned git dependency) — the PS2's arithmetic: EE FPU
+  add/sub/mul/div/sqrt/madd, VU0 macro ops, the C library's transcendentals, newlib `rand()`/MT19937.
+  Everything in the simulation goes through this.
+- `ps2-oracle` (FIZL0/ps2-oracle, likewise) — a small R5900 interpreter that runs one function from the
+  game's own code so a test can compare your port against it over thousands of inputs. `crates/kit-oracle`
+  wires it to `kit.toml` (disc, serial, overlays, address list) and is what tests and `kit oracle` use.
 - `game-sim` — where your port goes. Starts nearly empty, with the replay harness and the state hash,
   because those two are what keep everything after this honest.
 

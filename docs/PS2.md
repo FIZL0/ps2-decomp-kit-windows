@@ -57,7 +57,7 @@ computed and *truncated*, then added to the accumulator using the aligned-add ru
 between the two things you would guess, which is why implementing it as either one produces a port that
 is right most of the time. Games use `madd.s` constantly — every dot product, every matrix multiply.
 
-`crates/ps2-float` implements all of this. Use its types in the simulation and turn on the lint that
+`ps2-float` (our library, FIZL0/ps2-float) implements all of this. Use its types in the simulation and turn on the lint that
 forbids host float arithmetic in those modules. The lint is not pedantry: a single stray `a * b + c` in
 one inner loop is a bug that takes days to find, because everything looks correct and the numbers are
 merely slightly different.
@@ -78,8 +78,8 @@ EE code can issue VU0 instructions inline, giving it four-wide float ops with th
 - There is a four-entry accumulator-ish register set and instructions that read it implicitly; sequences
   that look independent in C are not.
 
-`crates/ps2-float` covers the macro-mode ops games actually use. If you hit one it does not have, adding
-it is a small, permanent job.
+`ps2-float` covers the macro-mode ops games actually use. If you hit one it does not have, adding
+it is a small, permanent job: in its repository, with a test and a tagged release, then bump the tag here.
 
 ---
 

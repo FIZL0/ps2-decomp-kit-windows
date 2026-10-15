@@ -27,7 +27,7 @@ genuinely depends on time or on state you cannot construct.
 
 ## 1. The function oracle
 
-`crates/ps2-oracle` is a small R5900 interpreter. It loads the game's own code — from *your* disc, at
+`ps2-oracle` (our library, FIZL0/ps2-oracle, used through `crates/kit-oracle`) is a small R5900 interpreter. It loads the game's own code — from *your* disc, at
 test time, never committed — puts your arguments in the right registers, runs the function, and gives you
 back what it returned and what it wrote to memory.
 
@@ -58,12 +58,12 @@ Those need a recording.
 kit oracle list                             # the names in research/oracle.txt, with addresses
 kit oracle add walk_ramp 1000a0             # give an address a name, once you know what it does
 kit oracle walk_ramp --floats 6.5,-1.0      # one call by hand, while you work out what it does
-kit check -p ps2-oracle --test game         # the ten-thousand-input comparison, as a test
+kit check -p kit-oracle --test game         # the ten-thousand-input comparison, as a test
 ```
 
 `kit oracle <name>` is for *looking*: a few calls by hand while you read the decompilation. The proof
 is a Rust test that makes thousands of calls and compares every one against your port
-(`crates/ps2-oracle/tests/game.rs` is the worked shape). `research/oracle.txt` maps names to addresses,
+(`crates/kit-oracle/tests/game.rs` is the worked shape). `research/oracle.txt` maps names to addresses,
 so no address appears in Rust. It is committed; it
 contains names and offsets, which are research notes, not game data.
 

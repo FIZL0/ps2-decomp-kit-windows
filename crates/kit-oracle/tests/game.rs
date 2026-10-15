@@ -6,7 +6,7 @@
 //! Copy this file into your own crate's `tests/` and change two things: the name you look up and the
 //! Rust function you compare it to.
 
-use ps2_oracle::{Ee, Kit, skip};
+use kit_oracle::{Ee, Kit, KitEe, skip};
 
 /// A tiny xorshift, so the inputs are the same on every machine and a failure is reproducible from the
 /// seed alone. (A real random source would make "it failed once in CI" unfixable.)
@@ -112,11 +112,11 @@ fn the_games_own_maths_agrees_with_the_port() {
     /// a name in the addresses file, the Rust function it should match, and the range to try
     type Case = (&'static str, fn(f32) -> f32, f32);
     let candidates: [Case; 5] = [
-        ("sqrtf", ps2_float::libm::sqrtf, 1.0e9),
-        ("sinf", ps2_float::libm::sinf, 100.0),
-        ("cosf", ps2_float::libm::cosf, 100.0),
-        ("atanf", ps2_float::libm::atanf, 1.0e4),
-        ("expf", ps2_float::libm::expf, 60.0),
+        ("sqrtf", kit_oracle::ps2_float::libm::sqrtf, 1.0e9),
+        ("sinf", kit_oracle::ps2_float::libm::sinf, 100.0),
+        ("cosf", kit_oracle::ps2_float::libm::cosf, 100.0),
+        ("atanf", kit_oracle::ps2_float::libm::atanf, 1.0e4),
+        ("expf", kit_oracle::ps2_float::libm::expf, 60.0),
     ];
     let kit = match Kit::load() {
         Ok(k) => k,

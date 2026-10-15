@@ -1,0 +1,13 @@
+[package]
+name = "kit-oracle"
+description = "The function oracle as the kit drives it: ps2-oracle plus kit.toml, the disc and the address list"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+# Nothing from crates.io, deliberately: kit.toml is read by a small subset parser (src/kit.rs). The
+# interpreter and the arithmetic are our own crates, FIZL0/ps2-oracle and FIZL0/ps2-float, pinned by tag
+# (fix them there, tag a release and bump the tag here: see AGENT.md). Cargo fetches them once.
+[dependencies]
+ps2-oracle = { git = "https://github.com/FIZL0/ps2-oracle", tag = "v0.1.1" }
+ps2-float = { git = "https://github.com/FIZL0/ps2-float", tag = "v0.2.0" }

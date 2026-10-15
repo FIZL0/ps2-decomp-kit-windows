@@ -1,17 +1,18 @@
 # crates/ — the Rust side: arithmetic, the oracle, your port
 
-Three crates, no dependencies on anything outside this directory (and none on crates.io at all — see
-*Dependencies* below).
+Two crates here, on two libraries of ours in their own repositories (and nothing from crates.io at all —
+see *Dependencies* below).
 
 | Crate | What it is | Do you edit it? |
 |---|---|---|
-| `ps2-float` | The PS2's arithmetic: EE FPU, VU0, and the SDK's libm | No. It is a model of the hardware. |
-| `ps2-oracle` | An R5900 interpreter that calls the *original game's* functions | Only to teach it an instruction it does not know yet. |
+| `ps2-float` ([FIZL0/ps2-float](https://github.com/FIZL0/ps2-float), git dependency) | The PS2's arithmetic: EE FPU, VU0, the SDK's libm, newlib `rand()`/MT19937 | In its repository, when a port needs it: a test, a tagged release, the tag bumped here. |
+| `ps2-oracle` ([FIZL0/ps2-oracle](https://github.com/FIZL0/ps2-oracle), git dependency) | An R5900 interpreter that calls the *original game's* functions | The same way: mostly to teach it an instruction it does not know yet. |
+| `kit-oracle` | The oracle wired to `kit.toml`: disc, serial check, overlays, address list, `kit oracle` | Rarely. |
 | `game-sim` | **Your port.** Starts as a skeleton with the rules baked in | Yes. This is the work. |
 
 ```
 cargo test --workspace      # everything; disc-dependent tests skip with a message saying what is missing
-cargo test -p ps2-float     # the arithmetic model's own properties, no setup needed
+cargo test -p kit-oracle    # the oracle's loader end to end on a disc image it builds, no setup needed
 kit check                 # the same thing, summarised to a few lines (what an agent should run)
 ```
 
@@ -55,18 +56,19 @@ kit oracle ball_speed --ints 0x1f4a20 --ram 3
 
 It can prove what a function *computes*. It cannot prove timing, frame order, DMA, VU1 or the GS —
 nothing that depends on *when* it ran. Record the real machine for those (`kit record`), and read
-`crates/ps2-oracle/src/lib.rs`'s header before trusting any of it.
+`crates/kit-oracle/src/lib.rs`'s header before trusting any of it.
 
 An instruction the interpreter does not implement panics with the address and the encoded word. That is
-a feature: add the instruction (a dozen lines in `src/ee.rs`, next to its neighbours) rather than working
-around it, and `kit dis <addr>` will show you what it was.
+a feature: add the instruction to ps2-oracle (a dozen lines in its `src/ee.rs`, next to its neighbours,
+plus a test), tag a release and bump the tag here, rather than working around it; `kit dis <addr>` will
+show you what it was.
 
 ## Where to start on `game-sim`
 
 1. Read `src/lib.rs`. It is mostly comments: the five rules, the shape, and a worked example you delete.
 2. Port one small function. Name the module after what the code *does*, never after an address or a
    decompiler's `FUN_…`.
-3. Prove it with the oracle over ≥10,000 generated inputs (`crates/ps2-oracle/tests/game.rs` is a
+3. Prove it with the oracle over ≥10,000 generated inputs (`crates/kit-oracle/tests/game.rs` is a
    copyable template).
 4. Then build the replay harness (`game-sim/src/replay.rs`, a documented stub today). Same inputs, same
    state hash, frame by frame — it catches the bugs unit tests cannot see, and it keeps catching them
@@ -74,11 +76,17 @@ around it, and `kit dis <addr>` will show you what it was.
 
 ## Dependencies
 
-There are none, deliberately. The whole Rust side builds on a bare `cargo` with no network, nothing to
-audit and nothing to break in five years — the arithmetic is a few hundred lines of integer bit work and
-`kit.toml` is read by a ~120-line TOML subset parser in `ps2-oracle/src/kit.rs`. If you add a dependency,
-put the reason in a comment next to it in the manifest, as the existing (empty) `[dependencies]` sections
-do.
+Nothing from crates.io, deliberately: nothing to audit and nothing to break in five years. The only two
+dependencies are our own `ps2-float` (a few hundred lines of integer bit work, no dependencies of its own)
+and `ps2-oracle` (on `ps2-float` only), pinned by git tag; cargo fetches them once (the first build needs
+the network, every build after that works offline from `~/.cargo/git`). `kit.toml` is read by a
+~120-line TOML subset parser in `kit-oracle/src/kit.rs`. If you add a dependency, put the reason in a
+comment next to it in the manifest, as the existing ones do.
+
+Those two libraries are ours: when a port needs a fix or an addition there (a new instruction, a missing
+function, a wrong rounding), change it in its repository with a test, tag a release (`vX.Y.Z`), then bump
+the `tag` in `crates/game-sim/Cargo.toml` and `crates/kit-oracle/Cargo.toml` (and in their other
+dependents) and run the tests. Never copy them back in here.
 
 `ps2-float` is `#![no_std]` and `#![forbid(unsafe_code)]`, so a port can run in a browser (wasm32) or
 anywhere else without surprises, and the test suite checks that its results are identical on every

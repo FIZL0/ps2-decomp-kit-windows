@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def _config_path() -> Path:
     """Where `kit.toml` is. `$KIT_CONFIG` (a file or a directory holding one) wins, then `$KIT_ROOT`
-    (which `crates/ps2-oracle` already honours), then the repository root.
+    (which `crates/kit-oracle` already honours), then the repository root.
 
     This is only about *locating* the config. ROOT stays the repository, because it also anchors
     `crates/`, `plan/` and the `kit` script. Two users of the override: `kit demo`, which writes a

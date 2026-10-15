@@ -6,8 +6,9 @@ version.workspace = true
 publish.workspace = true
 
 [dependencies]
-ps2-float = { path = "../ps2-float" }
+# our own crate (FIZL0/ps2-float), pinned by tag: fix it there, release, bump here (AGENT.md)
+ps2-float = { git = "https://github.com/FIZL0/ps2-float", tag = "v0.2.0" }
 
 [dev-dependencies]
 # The oracle is a *test* dependency: the shipped sim must not need the disc at runtime.
-ps2-oracle = { path = "../ps2-oracle" }
+kit-oracle = { path = "../kit-oracle" }

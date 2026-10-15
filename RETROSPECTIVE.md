@@ -187,7 +187,7 @@ most of it, and `docs/INTERNALS.md` exists so that the fixes land in the right s
 
 ### The oracle covers only the instructions one game used
 
-`crates/ps2-oracle` interprets the R5900 subset the original project needed. Another game will hit
+`ps2-oracle` (now its own repository, FIZL0/ps2-oracle) interprets the R5900 subset the original project needed. Another game will hit
 unimplemented instructions immediately — MMI ops, unusual VU0 sequences, anything touching the
 scratchpad in a way the original did not.
 
@@ -198,7 +198,7 @@ generated from the interpreter rather than written by hand, and it is not.
 
 ### The arithmetic model is a model
 
-`crates/ps2-float` reproduces the EE FPU as PCSX2 implements it, which is itself a careful
+`ps2-float` (FIZL0/ps2-float) reproduces the EE FPU as PCSX2 implements it, which is itself a careful
 reverse-engineering of the hardware rather than the hardware. Where PCSX2 is subtly wrong, this kit is
 wrong in the same way — and a port verified against PCSX2 will match PCSX2, not a PS2. For the purpose
 (a faithful re-implementation, verified against an emulator everyone has) that is the right trade. It is

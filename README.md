@@ -45,12 +45,12 @@ that changed between two moments, pointer chains walked hop by hop.
 | **Save-state RAM** | tables, static data, struct layouts | one extraction |
 | **Replay harness** | the whole thing: same input → same state hash | build it once, it guards everything after |
 
-The oracle is the one worth understanding first. `crates/ps2-oracle` is a small R5900 interpreter that
+The oracle is the one worth understanding first. `ps2-oracle` (our library, used through `crates/kit-oracle`) is a small R5900 interpreter that
 loads the game's own code from *your* disc at test time and calls one function with arguments you choose.
 Your port and the original then run side by side over as many inputs as you like, and a mismatch comes
 back with the inputs that caused it. No emulator, no recording, no human watching.
 
-**Arithmetic.** `crates/ps2-float` models the PS2's single-precision arithmetic as PCSX2 performs it —
+**Arithmetic.** `ps2-float` (our library, a git dependency) models the PS2's single-precision arithmetic as PCSX2 performs it —
 round-toward-zero, the EE's mantissa alignment with its one guard bit, denormals flushed, divide and
 square root rounding differently from add and multiply — plus the VU0 macro ops and the transcendental
 functions a PS2 game's own C library computes differently from your host's. Without this, a ported

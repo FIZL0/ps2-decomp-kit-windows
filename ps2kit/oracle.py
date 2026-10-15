@@ -5,11 +5,11 @@
     kit oracle angle --floats 1.5,-2            call it and print what came back
     kit oracle tick --ints 0x1f4a20 --ram 3     …over a RAM image saved from a save state
 
-The work is done by `crates/ps2-oracle`: a small R5900 interpreter that loads the boot ELF and the
-overlays straight off the disc and runs one function to its `jr $ra`. It is for *looking* — a few calls
+The work is done by `crates/kit-oracle` on our `ps2-oracle` library: a small R5900 interpreter that
+loads the boot ELF and the overlays straight off the disc and runs one function to its `jr $ra`. It is for *looking* — a few calls
 by hand while you work out what a function does. The proof comes next, in Rust, where a test can make
 ten thousand calls and compare every one against your port bit for bit (see
-`crates/ps2-oracle/tests/game.rs`).
+`crates/kit-oracle/tests/game.rs`).
 
 What it cannot answer, ever: timing, frame order, DMA, VU1, the GS, or anything that depends on *when*
 the function ran. Record the real machine for those (`kit record`).
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ps2kit.config import ROOT, cfg, num
 
-MANIFEST = ROOT / 'crates' / 'ps2-oracle' / 'Cargo.toml'
+MANIFEST = ROOT / 'crates' / 'kit-oracle' / 'Cargo.toml'
 RUSTUP = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 
 
