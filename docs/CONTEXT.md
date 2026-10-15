@@ -68,7 +68,18 @@ cheap one. So the kit ships a `PreToolUse` hook (`ps2kit/hooks/guard.py`, wired 
 cheap alternative in the refusal**:
 
 - an unbounded read of a decompilation or RAM dump → blocked, with the `kit fn` / `kit xref` /
-  `kit data` command that answers the question instead
+  `kit data` command that answers the question instead, and with the cap that works on any file at all:
+  append `| head -<n>`
+- a *bounded* read of one is allowed, including of a big binary container: anything piped into
+  `head`/`tail`/`wc`/`sed -n`, a capped grep (`grep -m5`, `grep -c`), and the byte-slice tools carrying
+  their own cap — `xxd -l 512`, `od -N 256`, `dd … count=256`, `head -c 512`. The cap has to be part of
+  the command that opens the file: a bare `xxd context/iso/BIG.BIN` is still refused
+- a **screenshot** is never a dump: `Read` on `context/shots/*.png` is allowed whatever it weighs, because
+  that tool renders an image instead of pasting its bytes, and looking at the shot is the point of taking
+  it. Only a shell command that would stream the PNG to stdout (`cat`, `base64`) is refused
+- a command that merely *names* a big file without reading it — `cp`, `mv`, `ls`, `stat`, `file`, `du`,
+  `magick … -resize` — is allowed: the guard is about what lands in the conversation, and none of those
+  put a byte there
 - a process search or kill that matches on command line or window title → rewritten to an image-name
   match, because such a pattern matches the searching shell's own command line too (`taskkill /FI
   "WINDOWTITLE eq foo"` can kill the console that ran it, exactly as `pkill -f foo` does on Linux)

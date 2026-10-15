@@ -1131,6 +1131,17 @@ def _():
     assert 'runs past the end' in str(e), 'only kseg0/kseg1 are folded; a stray address is not aliased'
 
 
+def _has_7zip() -> bool:
+    """Whether anything here can read a 7z: it decides which error an unreadable state can honestly give."""
+    if EMU._sevenzip():
+        return True
+    try:
+        import py7zr                                            # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 @check('a state that is not a PCSX2 one says what it holds instead of writing an empty image')
 def _():
     emu_env()
@@ -1141,7 +1152,12 @@ def _():
     plain = WORK / 'emu' / 'notazip.p2s'
     plain.write_bytes(b'not an archive at all')
     e = raises(SystemExit, EMU.state_ram, plain)
-    assert 'neither a zip nor readable without 7-Zip' in str(e) and 'py7zr' in str(e)
+    assert 'cannot open notazip.p2s' in str(e) and 'neither a zip nor' in str(e)
+    if _has_7zip():         # a backend is installed, so the file itself is the problem, not the machine
+        assert 'neither a zip nor a 7-Zip archive' in str(e)
+        assert 'eeMemory.bin' not in str(e), 'an unreadable file is not a state that holds nothing'
+    else:                   # nothing can read 7z here, so the error has to say what to install
+        assert 'neither a zip nor readable without 7-Zip' in str(e) and 'py7zr' in str(e)
 
 
 # --- the live CLI surface ----------------------------------------------------

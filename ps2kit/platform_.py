@@ -284,6 +284,32 @@ def ghidra_headless(home: Path) -> Path:
     return Path(home) / 'support' / ('analyzeHeadless.bat' if WINDOWS else 'analyzeHeadless')
 
 
+def ghidra_sleigh(home: Path) -> Path:
+    """Ghidra's sleigh compiler inside an install directory — the thing that turns a `.slaspec` into the
+    `.sla` a language is loaded from. `.bat` on Windows, bare script elsewhere, like `analyzeHeadless`."""
+    return Path(home) / 'support' / ('sleigh.bat' if WINDOWS else 'sleigh')
+
+
+def writable_dir(d: Path) -> bool:
+    r"""Can this user create a file in `d`?
+
+    `os.access(d, os.W_OK)` answers that on POSIX. On Windows it reports the read-only *attribute* and
+    nothing else — it says yes for a directory whose ACL denies the write, which is exactly the case
+    that matters here (`C:\Program Files\ghidra`). So there the only honest test is to try it.
+    """
+    if not d.is_dir():
+        return False
+    if not WINDOWS:
+        return os.access(d, os.W_OK)
+    probe = d / f'.kit-write-probe-{os.getpid()}'
+    try:
+        probe.touch()
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def ghidra_user_dirs(env: dict | None = None) -> list[Path]:
     r"""Roots where Ghidra keeps a *user-installed* extension, newest-looking first.
 
