@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ps2kit import ghidra as gh
 from ps2kit import platform_ as plat
 from ps2kit.cli import parser
 from ps2kit.config import CONFIG, EXAMPLE, ROOT, cfg, problems
@@ -275,6 +276,17 @@ def doctor(argv: list[str]) -> int:
             _say(BAD, 'EmotionEngine processor extension missing',
                  f'Unzip ghidra-emotionengine-reloaded into {c.ghidra}/Ghidra/Extensions/ and start Ghidra once.')
             bad += 1
+        elif (ext := gh.ee_extension(c.ghidra)) and not gh.sla_ready(ext):
+            _say(BAD, f'EmotionEngine extension present, but its {gh.SLA_NAME} is not usable',
+                 'Ghidra compiles the shipped r5900.slaspec on first use and writes the .sla next to it,\n'
+                 '        so `kit ghidra analyse` is what discovers an install you cannot write to — five\n'
+                 f'        seconds into the slow step. Here {gh.sla_why(ext)}, and its directory is not\n'
+                 f'        writable: {ext / "data" / "languages"}\n'
+                 '        Compile it now:\n'
+                 + '\n'.join(f'          {cmd}' for cmd in gh.sla_fix(ext, c.ghidra)))
+            bad += 1
+        else:
+            _say(OK, 'EmotionEngine extension: r5900 language loadable')
         dumps = sorted(c.ctx('decomp').glob('*.funcs.tsv')) if c.ctx('decomp').is_dir() else []
         _say(OK if dumps else WARN,
              f'decompilation dumps: {", ".join(d.name.split(".")[0] for d in dumps)}' if dumps

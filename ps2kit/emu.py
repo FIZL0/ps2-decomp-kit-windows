@@ -327,9 +327,19 @@ def _state_open(path: Path):
             with zipfile.ZipFile(path) as z, open(dest, 'wb') as out:
                 shutil.copyfileobj(z.open(member), out)
         return names, get
+    # A file no backend can read must say so, rather than listing nothing and looking like a state with
+    # no eeMemory.bin in it. Which message is honest depends on what this machine has installed.
+    not_archive = (f'cannot open {path.name}: it is neither a zip nor a 7-Zip archive — is it a complete '
+                   'PCSX2 save state?')
+    have_7zip = False
     try:
         import py7zr
-
+        have_7zip = True
+    except ImportError:
+        py7zr = None
+    # `is_7zfile` first: handing back the py7zr backend for a file that is not a 7-Zip archive turns a
+    # one-line "this is not a save state" into a py7zr traceback out of the lister.
+    if py7zr is not None and py7zr.is_7zfile(path):
         def names7():
             with py7zr.SevenZipFile(path) as z:
                 return [(i.filename, i.uncompressed) for i in z.list()]
@@ -339,11 +349,14 @@ def _state_open(path: Path):
                 data = z.read([member])[member].read()
             Path(dest).write_bytes(data)
         return names7, get7
-    except ImportError:
-        pass
-    if (sevenz := _sevenzip()):
+    if (sevenz := _sevenzip()):     # the CLI reads formats py7zr does not, so still worth a try
+        have_7zip = True
+
         def names_cli():
-            out = subprocess.run([sevenz, 'l', '-ba', str(path)], capture_output=True, text=True).stdout
+            r = subprocess.run([sevenz, 'l', '-ba', str(path)], capture_output=True, text=True)
+            if r.returncode:
+                raise SystemExit(not_archive)
+            out = r.stdout
             rows = []
             for l in out.splitlines():
                 parts = l.split()
@@ -358,6 +371,8 @@ def _state_open(path: Path):
             if r.returncode or not Path(dest).stat().st_size:
                 raise SystemExit(f'7z could not extract {member} from {path}')
         return names_cli, get_cli
+    if have_7zip:
+        raise SystemExit(not_archive)
     raise SystemExit(f'cannot open {path.name}: it is neither a zip nor readable without 7-Zip.\n'
                      'Install one of:  pip install py7zr   |   7-Zip (https://7-zip.org) or your '
                      'distro\'s p7zip package')

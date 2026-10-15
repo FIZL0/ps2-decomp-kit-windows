@@ -286,7 +286,18 @@ Then install Ghidra (unzip it anywhere; `C:\ghidra` keeps the paths short) and a
 
 1. Download `ghidra-emotionengine-reloaded` for **your exact Ghidra version**.
 2. Unzip it into `C:\ghidra\Ghidra\Extensions\`.
-3. Start Ghidra's GUI once (`ghidraRun.bat`) so it registers the extension, then close it.
+3. Start Ghidra's GUI once (`ghidraRun.bat`) so it registers the extension, then close it — or, where the
+   GUI is not an option (a headless box, an agent), compile the language from the command line instead:
+
+   ```powershell
+   & "C:\ghidra\support\sleigh.bat" -a "C:\ghidra\Ghidra\Extensions\ghidra-emotionengine-reloaded\data\languages"
+   ```
+
+   The extension ships `r5900.slaspec`, not the compiled `r5900.sla`; Ghidra compiles it on first use and
+   writes it *into the Ghidra install*. If Ghidra lives under `C:\Program Files`, that write needs an
+   Administrator prompt — and the first thing to find out otherwise is `kit ghidra analyse`, five seconds
+   in, after it has made half a project. Unzipping Ghidra somewhere you own (`%LOCALAPPDATA%\ghidra`,
+   `C:\ghidra`) avoids the question entirely. `kit doctor` checks for exactly this.
 
 Set `[ghidra] home` in `kit.toml` if `kit setup` did not find it — the kit runs
 `support\analyzeHeadless.bat` from there — then:

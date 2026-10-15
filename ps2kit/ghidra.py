@@ -1,4 +1,4 @@
-"""Drive Ghidra headless, so nobody has to remember the invocation.
+r"""Drive Ghidra headless, so nobody has to remember the invocation.
 
 Why this exists. The whole decompilation workflow is two Ghidra commands, but they are long, order-
 sensitive and expensive to get wrong:
@@ -16,7 +16,11 @@ The other sharp edge is the processor. Ghidra does not ship the PS2's CPU: the E
 from the ghidra-emotionengine-reloaded extension, and without it the import either refuses or (worse)
 loads as generic MIPS and quietly mis-decodes every multimedia and VU instruction in the game's maths.
 `need_extension()` checks for it before spending any time and prints the install path, because the native
-failure mode is a Java stack trace about a missing language ID.
+failure mode is a Java stack trace about a missing language ID. It also checks that the language is
+*loadable*: the extension ships `r5900.slaspec` and Ghidra compiles it into `r5900.sla` next to the spec
+on first use, so a Ghidra the user cannot write to (`C:\Program Files\ghidra`, a packaged
+`/opt/ghidra`) only fails five seconds into the first analysis — the slow step nobody is watching.
+`sla_ready()`/`sla_fix()` are what `kit doctor` uses for the same check, so both say the same thing.
 
 The IOP (sound and I/O modules, `.IRX`) is a plain R3000: `MIPS:LE:32:default`, stock Ghidra, its own
 project.
@@ -36,6 +40,7 @@ from ps2kit.config import cfg, ROOT
 EE = 'r5900:LE:32:default'          # PS2 Emotion Engine, from the extension below
 IOP = 'MIPS:LE:32:default'          # PS2 I/O processor: a plain little-endian R3000
 EXTENSION_URL = 'https://github.com/chaoticgd/ghidra-emotionengine-reloaded/releases'
+SLA_NAME = 'r5900.sla'              # the compiled language — the extension only ships r5900.slaspec
 
 SCRIPTS = ROOT / 'ghidra_scripts'
 PRINT_CAP = 30                      # lines of Ghidra's log that reach the caller; the rest is in the file
@@ -72,10 +77,61 @@ def ee_extension(home: Path | None = None) -> Path | None:
     return None
 
 
+def sla_ready(ext: Path) -> bool:
+    """Can Ghidra actually load the r5900 language out of this extension directory?
+
+    The extension ships `r5900.slaspec`, not the compiled `r5900.sla`. Ghidra compiles the spec on first
+    use and writes the result *next to it*, inside the Ghidra install — so an install the user cannot
+    write to looks perfectly healthy until the first analysis, which dies deep in Java with
+    `SleighException … r5900.sla` five seconds into the slow unattended step. Usable therefore means one
+    of two things: the compiled file is already there and this user can read it, or its directory is
+    writable by this user, so Ghidra can still do the compile itself.
+    """
+    langs = ext / 'data' / 'languages'
+    sla = langs / SLA_NAME
+    if sla.is_file() and os.access(sla, os.R_OK):
+        return True
+    return plat.writable_dir(langs)
+
+
+def sla_why(ext: Path) -> str:
+    """Which of the two states `sla_ready()` rejected, in words. The fix is the same; the state is not,
+    and on a freshly unzipped extension the file has simply never been compiled."""
+    sla = ext / 'data' / 'languages' / SLA_NAME
+    return ('its .sla has never been compiled' if not sla.is_file()
+            else 'its .sla cannot be read by this user')
+
+
+def sla_fix(ext: Path, home: Path | None = None) -> list[str]:
+    """The commands that make an install Ghidra cannot write to usable.
+
+    Windows and POSIX differ in the second line, not the first. There, a `.sla` compiled by an elevated
+    process inherits its directory's ACL and the ordinary user can read it, so there is nothing to fix
+    afterwards — the alternative worth naming instead is putting Ghidra somewhere you own. On POSIX both
+    lines matter: `sleigh` under `sudo` writes the `.sla` root-only, so compiling without the `chmod`
+    fails next time in exactly the same way, on a file that now exists.
+    """
+    home = home or cfg().ghidra or ext.parents[2]
+    sleigh, langs = plat.ghidra_sleigh(home), ext / 'data' / 'languages'
+    if plat.WINDOWS:
+        return [f'"{sleigh}" -a "{langs}"   (from an Administrator prompt)',
+                'or unzip Ghidra somewhere you own — %LOCALAPPDATA%\\ghidra — and set [ghidra] home']
+    return [f'sudo {sleigh} -a {langs}', f'sudo chmod -R a+rX {ext}']
+
+
 def need_extension() -> Path:
     ext = ee_extension()
-    if ext:
+    if ext and sla_ready(ext):
         return ext
+    if ext:
+        raise GhidraError(
+            'the EmotionEngine extension is installed, but Ghidra cannot load its r5900 language:\n'
+            f'    {sla_why(ext)}, and its directory is not writable, so Ghidra cannot compile the\n'
+            f'    shipped .slaspec there either:  {ext / "data" / "languages"}\n'
+            'It does that compile on first use, which is why this surfaces here\n'
+            'rather than at install time. Fix it once:\n'
+            + '\n'.join(f'    {cmd}' for cmd in sla_fix(ext))
+            + '\nThen re-run this command. `kit doctor` checks the same thing.')
     home = cfg().need_ghidra()
     raise GhidraError(
         'Ghidra has no r5900 processor, so it cannot read PS2 code.\n'
@@ -281,6 +337,8 @@ def _analyse(args) -> int:
     from ps2kit import elf as elf_mod
     c = cfg()
     names = _programs(args.program)
+    if not args.iop:
+        need_extension()        # pre-flight: a second here beats five seconds of Java and a half-made project
     have = project_programs()
     todo = [n for n in names if args.force or not have or f'{n}.elf' not in have]
     if not todo:

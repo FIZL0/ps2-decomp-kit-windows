@@ -44,6 +44,7 @@ from ps2kit import decomp as D
 from ps2kit import disc as DISC
 from ps2kit import elf as E
 from ps2kit import ghidra as G
+from ps2kit import platform_ as PLAT
 
 TESTS: list[tuple[str, object]] = []
 PASS, FAIL = [], []
@@ -956,6 +957,50 @@ def _():
     finally:
         for k, v in env.items():
             os.environ[k] = v if v is not None else ''
+
+
+@check('an unwritable Ghidra is caught before analysis, with the command that fixes it')
+def _():
+    home = ghidra_home(WORK / 'ghidra-sla')
+    ext = G.ee_extension(home)
+    langs = ext / 'data' / 'languages'
+    (langs / 'r5900.slaspec').write_text('define endian=little;\n')
+    assert G.sla_ready(ext), 'no .sla yet, but a writable directory: Ghidra does the compile itself'
+    assert 'never been compiled' in G.sla_why(ext)
+    sla = langs / G.SLA_NAME
+    sla.write_text('compiled')
+    assert G.sla_ready(ext)
+    if PLAT.WINDOWS or os.geteuid() == 0:
+        # The unusable state is an ACL question on Windows and meaningless as root; the advice is still
+        # the thing that has to be right, so check that instead of faking a permission model.
+        assert any('sleigh' in cmd for cmd in G.sla_fix(ext, home))
+        return
+    sla.chmod(0o000)
+    langs.chmod(0o555)
+    try:
+        assert not G.sla_ready(ext), 'an unreadable .sla in a read-only directory is not usable'
+        assert 'cannot be read' in G.sla_why(ext)
+        c = use_cfg(FakeCfg(WORK / 'ghidra-sla'))
+        c.ghidra = home
+        err = str(raises(G.GhidraError, G.need_extension))
+        assert f'{PLAT.ghidra_sleigh(home)} -a {langs}' in err, err
+        assert f'chmod -R a+rX {ext}' in err, err    # without it the compiled .sla stays root-only
+    finally:
+        langs.chmod(0o755)
+        sla.chmod(0o644)
+
+
+@check('a directory this user cannot write to is reported as such, ACL or mode')
+def _():
+    d = WORK / 'writable-probe'
+    d.mkdir(parents=True, exist_ok=True)
+    assert PLAT.writable_dir(d) and not PLAT.writable_dir(d / 'no-such-directory')
+    if not PLAT.WINDOWS and os.geteuid() != 0:
+        d.chmod(0o555)
+        try:
+            assert not PLAT.writable_dir(d), 'os.access on POSIX, a real probe file on Windows'
+        finally:
+            d.chmod(0o755)
 
 
 @check('analyse imports one program with the EE processor and the configured timeout')
