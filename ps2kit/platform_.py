@@ -729,6 +729,39 @@ def _windows_of(pid: int) -> list[int]:
     return out
 
 
+# Every *external* capture helper runs under this. Not a safety net: on wlroots, `grim` returns in
+# milliseconds while PCSX2 is stopped and never returns once PCSX2 is rendering a game — the emulator's
+# game surface wedges screencopy. An unbounded wait there hangs `kit shot` forever and takes away the
+# fallback that does work at that exact moment (the emulator's own Screenshot hotkey, see `emu.shot`), so
+# the bound is what makes the fallback reachable. `PrintWindow` is in-process and cannot be bounded this
+# way; it returns or fails, and a blank result is already handled by retrying the whole window frame.
+GRAB_TIMEOUT = float(os.environ.get('KIT_GRAB_TIMEOUT') or 15)
+
+
+def _grab(argv: list[str], out: Path | None = None) -> bool:
+    """Run one capture helper under `GRAB_TIMEOUT`. False if it failed, timed out or is not runnable.
+
+    A killed grab leaves a half-written (often zero-byte) PNG behind, and `emu.shot` treats an existing
+    file as a successful shot — so a failed grab deletes its own output rather than passing off a stub.
+    """
+    try:
+        rc = subprocess.run(argv, timeout=GRAB_TIMEOUT).returncode
+    except (subprocess.TimeoutExpired, OSError):
+        rc = -1
+    if rc != 0 and out is not None:
+        out.unlink(missing_ok=True)
+    return rc == 0
+
+
+def _ask(argv: list[str]) -> str:
+    """stdout of a window-listing probe, or '' if it failed or hung. Bounded for the same reason."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=GRAB_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError):
+        return ''
+    return r.stdout if r.returncode == 0 else ''
+
+
 def screenshot_tools() -> list[str]:
     """Which screen-capture helpers this machine has, best first. `kit doctor` reports them; empty is
     not fatal, because the emulator's own screenshot hotkey is always available as a fallback."""
@@ -740,6 +773,9 @@ def screenshot_tools() -> list[str]:
 
 def screenshot_window(out: Path, pattern: str = 'pcsx2') -> bool:
     """Grab a window whose title contains `pattern`, without focusing it. False if it can't.
+
+    Nothing here may block: every external helper runs under `GRAB_TIMEOUT`, and a helper that hangs
+    counts as a helper that cannot see the window.
 
     Windows does this with `PrintWindow(PW_RENDERFULLCONTENT)`, which asks the window to redraw itself into
     a bitmap we own: no focus, no raise, and it works for a window another one is sitting on top of. It does
@@ -763,21 +799,19 @@ def screenshot_window(out: Path, pattern: str = 'pcsx2') -> bool:
     if shutil.which('hyprctl') and shutil.which('grim'):
         import json
         try:
-            clients = json.loads(subprocess.run(['hyprctl', 'clients', '-j'],
-                                                capture_output=True, text=True, check=True).stdout)
+            clients = json.loads(_ask(['hyprctl', 'clients', '-j']) or '[]')
         except Exception:
             clients = []
         for c in clients:
             if pattern.lower() in f'{c.get("class", "")} {c.get("title", "")}'.lower():
                 geom = f'{c["at"][0]},{c["at"][1]} {c["size"][0]}x{c["size"][1]}'
-                return subprocess.run(['grim', '-g', geom, str(out)]).returncode == 0
+                return _grab(['grim', '-g', geom, str(out)], out)
     # GNOME / KDE Wayland portal, X11
     if shutil.which('xdotool') and shutil.which('import'):
-        wid = subprocess.run(['xdotool', 'search', '--name', pattern], capture_output=True, text=True).stdout.split()
-        if wid:
-            return subprocess.run(['import', '-window', wid[0], str(out)]).returncode == 0
+        if (wid := _ask(['xdotool', 'search', '--name', pattern]).split()):
+            return _grab(['import', '-window', wid[0], str(out)], out)
     if shutil.which('spectacle'):
-        return subprocess.run(['spectacle', '-abno', str(out)]).returncode == 0
+        return _grab(['spectacle', '-abno', str(out)], out)
     return False
 
 
@@ -855,8 +889,13 @@ $gfx.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
 $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
 exit 0
 '''
-    r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps,
-                        '-pat', pattern, '-out', str(out)], capture_output=True)
+    try:
+        r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps,
+                            '-pat', pattern, '-out', str(out)], capture_output=True,
+                           timeout=GRAB_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError):
+        out.unlink(missing_ok=True)
+        return False
     return r.returncode == 0 and out.exists()
 
 

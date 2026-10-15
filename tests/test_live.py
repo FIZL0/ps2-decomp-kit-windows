@@ -1160,6 +1160,75 @@ def _():
         assert 'neither a zip nor readable without 7-Zip' in str(e) and 'py7zr' in str(e)
 
 
+def fake_tools(**scripts: str) -> Path:
+    """Put executable stand-ins for capture helpers on PATH, and return their directory.
+
+    POSIX-only by nature, and so are the two cases below: the Windows path through `screenshot_window`
+    is `PrintWindow`, in-process, with no helper to stand in for and no way to wedge a subprocess. What
+    is shared is the contract `emu.shot` depends on — a grab that cannot answer is a grab that failed,
+    and the hotkey fallback happens.
+    """
+    d = WORK / f'bin{len(scripts)}{abs(hash(tuple(scripts)))}'
+    d.mkdir(parents=True, exist_ok=True)
+    for name, body in scripts.items():
+        f = d / name
+        f.write_text('#!/bin/sh\n' + body)
+        f.chmod(0o755)
+    os.environ['PATH'] = f'{d}{os.pathsep}{os.environ["PATH"]}'
+    return d
+
+
+@check('a window grab that wedges is given up on, and the hotkey fallback still happens')
+def _():
+    if PLAT.WINDOWS:
+        return
+    emu_env()
+    clients = '[{"class":"pcsx2","title":"MX Unleashed","at":[0,0],"size":[640,480]}]'
+    # grim never returns once PCSX2 is rendering a game (wlroots screencopy wedges on the game surface),
+    # and it has already created the output file by then — which is what used to look like a screenshot.
+    fake_tools(hyprctl=f"echo '{clients}'\n", grim=': > "$3"\nsleep 30\n')
+    path, real_to = os.environ['PATH'], PLAT.GRAB_TIMEOUT
+    PLAT.GRAB_TIMEOUT = 0.5
+    out = WORK / 'emu' / 'shots' / 'hang.png'
+    try:
+        t0 = time.monotonic()
+        assert PLAT.screenshot_window(out, 'pcsx2') is False, 'a helper that hangs cannot see the window'
+        assert time.monotonic() - t0 < 10, 'the grab is bounded, or kit shot hangs forever'
+        assert not out.exists(), 'a killed grab leaves a stub that would pass for a shot'
+
+        # …and the fallback that works at that exact moment is the emulator's own Screenshot hotkey.
+        snaps = EMU._folder('Snapshots', 'snaps')
+        snaps.mkdir(parents=True, exist_ok=True)
+        real_send, real_serving = PAD.send, PAD.serving
+        PAD.serving = lambda: True
+        PAD.send = lambda cmds: (snaps / 'shot_000.png').write_bytes(b'\x89PNG\r\n\x1a\nhotkey')
+        try:
+            got = EMU.shot(out)
+        finally:
+            PAD.send, PAD.serving = real_send, real_serving
+        assert got == out and out.read_bytes().endswith(b'hotkey')
+    finally:
+        PLAT.GRAB_TIMEOUT, os.environ['PATH'] = real_to, path
+
+
+@check('a window grab that works is used, and its output is kept')
+def _():
+    if PLAT.WINDOWS:
+        return
+    emu_env()
+    clients = '[{"class":"pcsx2","title":"MX Unleashed","at":[7,9],"size":[640,480]}]'
+    fake_tools(hyprctl=f"echo '{clients}'\n", grim='printf \\\\211PNG > "$3"\necho "$2" > "$3.geom"\n')
+    path = os.environ['PATH']
+    out = WORK / 'emu' / 'shots' / 'ok.png'
+    try:
+        assert PLAT.screenshot_window(out, 'pcsx2') is True
+        assert out.read_bytes().startswith(b'\x89PNG')
+        assert Path(f'{out}.geom').read_text().strip() == '7,9 640x480', 'the window, not the screen'
+        assert PLAT.screenshot_window(out, 'no-such-window') is False
+    finally:
+        os.environ['PATH'] = path
+
+
 # --- the live CLI surface ----------------------------------------------------
 
 @check('kit pine reads, writes and dumps a block through one client, and says what it did')
