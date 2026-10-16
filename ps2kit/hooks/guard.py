@@ -165,6 +165,27 @@ def _segment(cmd: str, pos: int) -> str:
     return cmd[start:min(ends)] if ends else cmd[start:]
 
 
+GIT_MOVES = re.compile(r'\bgit\b[^;&|\n]*\b(commit|push|merge|reset|pull|rebase|cherry-pick|stash)(?![\w-])')
+
+
+def _run_merging(cwd: str | None) -> str | None:
+    """The task a `kit run` is merging into the main checkout that `cwd` is in, if any (its marker is fresh)."""
+    try:
+        d = [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=cwd or None,
+                            capture_output=True, text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
+    except OSError:
+        return None
+    if not d[0] or d[0] != d[1]:
+        return None  # a task worktree: its commits are its own
+    m = Path(d[1], 'kit-run-merge')
+    import time
+    try:
+        if time.time() - m.stat().st_mtime < 3 * 3600:  # older: a run that died; never block for good
+            return m.read_text(encoding='utf-8').strip() or '?'
+    except OSError:
+        pass
+    return None
+
 def decide(ev: dict) -> tuple[int, str, dict | None]:
     """(exit code, message for the agent, updated tool input) for one hook payload."""
     tool = ev.get('tool_name') or ''
@@ -183,6 +204,11 @@ def decide(ev: dict) -> tuple[int, str, dict | None]:
     cmd = str(i.get('command', '') or '')
     if not cmd:
         return 0, '', None
+
+    # a run is testing its merge in the main checkout: a commit or push on top publishes it untested
+    if GIT_MOVES.search(cmd) and (tid := _run_merging(ev.get('cwd'))):
+        return 2, (f'`kit run` is testing its merge of task/{tid} in this checkout (a few minutes): don\'t '
+                   'commit, push or move the branch until it finishes. Do other work, then retry.'), None
 
     # a dump named in a shell command with nothing capping the output
     for m in re.finditer(r'[\w./@~-]+', cmd):
@@ -347,6 +373,22 @@ def self_test() -> int:
     if not upd or '--pkill' not in upd.get('command', ''):
         bad += 1
         print(f'FAIL pkill -f was not rewritten: {upd}')
+    # the merge marker: refused in the main checkout while it is there, allowed again once it is gone
+    repo = Path(tmp.name) / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q', str(repo)], capture_output=True)
+    git_dir = subprocess.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], cwd=repo,
+                             capture_output=True, text=True).stdout.strip()
+    (Path(git_dir) / 'kit-run-merge').write_text('T1')
+    for cmd, want in (('git commit -m x -- a', 2), ('git push origin main', 2), ('git status', 0),
+                      ('git merge-base a b', 0)):
+        if decide({'tool_name': 'Bash', 'cwd': str(repo), 'tool_input': {'command': cmd}})[0] != want:
+            bad += 1
+            print(f'FAIL with the merge marker, {cmd!r} should give {want}')
+    (Path(git_dir) / 'kit-run-merge').unlink()
+    if decide({'tool_name': 'Bash', 'cwd': str(repo), 'tool_input': {'command': 'git push'}})[0]:
+        bad += 1
+        print('FAIL git push still refused after the merge marker went')
     tmp.cleanup()
     print('guard self-test: ' + ('ok' if not bad else f'{bad} failure(s)'))
     return 1 if bad else 0

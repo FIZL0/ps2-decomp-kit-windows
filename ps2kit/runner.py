@@ -644,72 +644,90 @@ def merge(tid: str, branch: str) -> str | None:
     branch is still there for a human to look at).
     """
     with MERGE:
-        if git('diff', '--name-only', '--diff-filter=U').stdout.strip():
-            return 'the main checkout has unmerged paths left over: fix them first'
-        cur = git('branch', '--show-current').stdout.strip()
-        if cur != branch and git('checkout', '-q', branch).returncode:
-            return f'the main checkout is on {cur or "a detached HEAD"} and would not switch to {branch}'
-        # somebody's uncommitted edits in the checkout: out of the way for the merge, back right after
-        stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) and \
-            not git('stash', 'push', '-q', '-m', f'kit run {tid}').returncode
-        pre = git('rev-parse', 'HEAD').stdout.strip()
+        # While the branch holds a merge whose tests have not passed, nothing else may commit or push on it:
+        # a push there publishes the untested merge, and a failing test then resets the branch under that
+        # commit. The guard hook (ps2kit/hooks/guard.py) refuses such git commands while the marker exists.
+        m = merge_mark()
+        m.write_text(tid, encoding='utf-8')
         try:
-            if git('merge', '--no-edit', f'task/{tid}').returncode:
-                files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-                if not [f for f in files if not joinable(f)] and union(files, tid, branch):
-                    git('commit', '-q', '--no-edit')
-                    log(f'{tid}: joined both sides of {", ".join(files)}')
-                else:
-                    # A join either cannot be trusted here or refused: start the conflict again from a
-                    # clean state (a refused join may have written some of its files already) and give it
-                    # to a session that can read it.
-                    git('merge', '--abort')
-                    git('merge', '--no-edit', f'task/{tid}')
-                    if why := fix_merge(tid, branch, files):
-                        git('merge', '--abort')
-                        return why
-            sp.run([sys.executable, str(ROOT / 'kit'), 'plan', 'archive'], cwd=str(ROOT), capture_output=True)
-            plan_files = [str(Path(cfg(False).plan).relative_to(ROOT) / n) for n in ('TODO.md', 'DONE.md')]
-            if git('status', '--porcelain', '--', *plan_files).stdout.strip():
-                git('commit', '-qm', f'{tid}: archive ticked tasks', '--', *plan_files)
+            return _merge(tid, branch)
         finally:
-            if stashed and git('stash', 'pop', '-q').returncode:
-                git('reset', '-q', '--hard')
-                log(f'{tid}: the checkout\'s own edits clash with the merge; kept in git stash "kit run {tid}"')
-        if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
-            return f'the merge did not land in {branch} (it changed underneath); merge it again'
-        # the agent's kit done already passed the tests on the branch: rerun them only if the merged code
-        # differs from what it tested (a markdown-only difference is not code)
-        merged_diff = git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split()
-        rc, out = 0, ''
-        if not all(f.endswith('.md') for f in merged_diff):
-            chk = sp.run([sys.executable, str(ROOT / 'kit'), 'check'], cwd=str(ROOT), capture_output=True, text=True)
-            rc, out = chk.returncode, chk.stdout
-        if rc:
-            git('reset', '-q', '--hard', pre)
-            return 'the tests fail after the merge: ' + ' / '.join(out.splitlines()[:4])[:400]
-        git('branch', '-d', f'task/{tid}')
-        line = next((l for l in plan_text(branch) if f'**{tid}**' in l), '')
-        state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
-        log(f'{tid}: merged ({state})')
-        # Published here, and only here: the merge has passed the test gate above, which is the thing
-        # that makes pushing it unattended defensible. A failed push is logged, not fatal — the merge
-        # landed locally and the next one pushes both. `drop_if_merged` then has its answer immediately,
-        # so a merged task branch leaves the remote instead of accumulating there.
-        #
-        # `[git] push_merge = false` is for the other policy — the merge stays local until a person has
-        # read it — and then the line below says what to run. Both are defensible and which one is right
-        # belongs to whoever owns the repository, so it is a key rather than a rule.
-        from ps2kit.checks import drop_if_merged, push
-        if cfg(False).push_merge:
-            if out := push(ROOT, branch):
-                log(f'{tid}: {out}')
-        elif cfg(False).push_remote:
-            log(f'{tid}: merged, not pushed ([git] push_merge is off): '
-                f'git push {cfg(False).push_remote} {branch}')
-        if out := drop_if_merged(ROOT, f'task/{tid}'):
+            m.unlink(missing_ok=True)
+
+
+def merge_mark() -> Path:
+    """The file that says a run is merging into the default branch (it holds the task ID)."""
+    return Path(ROOT, git('rev-parse', '--git-common-dir').stdout.strip(), 'kit-run-merge')
+
+
+def _merge(tid: str, branch: str) -> str | None:
+    """merge()'s body, under MERGE and the marker."""
+    if git('diff', '--name-only', '--diff-filter=U').stdout.strip():
+        return 'the main checkout has unmerged paths left over: fix them first'
+    cur = git('branch', '--show-current').stdout.strip()
+    if cur != branch and git('checkout', '-q', branch).returncode:
+        return f'the main checkout is on {cur or "a detached HEAD"} and would not switch to {branch}'
+    # somebody's uncommitted edits in the checkout: out of the way for the merge, back right after
+    stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) and \
+        not git('stash', 'push', '-q', '-m', f'kit run {tid}').returncode
+    pre = git('rev-parse', 'HEAD').stdout.strip()
+    try:
+        if git('merge', '--no-edit', f'task/{tid}').returncode:
+            files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
+            if not [f for f in files if not joinable(f)] and union(files, tid, branch):
+                git('commit', '-q', '--no-edit')
+                log(f'{tid}: joined both sides of {", ".join(files)}')
+            else:
+                # A join either cannot be trusted here or refused: start the conflict again from a
+                # clean state (a refused join may have written some of its files already) and give it
+                # to a session that can read it.
+                git('merge', '--abort')
+                git('merge', '--no-edit', f'task/{tid}')
+                if why := fix_merge(tid, branch, files):
+                    git('merge', '--abort')
+                    return why
+        sp.run([sys.executable, str(ROOT / 'kit'), 'plan', 'archive'], cwd=str(ROOT), capture_output=True)
+        plan_files = [str(Path(cfg(False).plan).relative_to(ROOT) / n) for n in ('TODO.md', 'DONE.md')]
+        if git('status', '--porcelain', '--', *plan_files).stdout.strip():
+            git('commit', '-qm', f'{tid}: archive ticked tasks', '--', *plan_files)
+    finally:
+        if stashed and git('stash', 'pop', '-q').returncode:
+            git('reset', '-q', '--hard')
+            log(f'{tid}: the checkout\'s own edits clash with the merge; kept in git stash "kit run {tid}"')
+    if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
+        return f'the merge did not land in {branch} (it changed underneath); merge it again'
+    # the agent's kit done already passed the tests on the branch: rerun them only if the merged code
+    # differs from what it tested (a markdown-only difference is not code)
+    merged_diff = git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split()
+    rc, out = 0, ''
+    if not all(f.endswith('.md') for f in merged_diff):
+        chk = sp.run([sys.executable, str(ROOT / 'kit'), 'check'], cwd=str(ROOT), capture_output=True, text=True)
+        rc, out = chk.returncode, chk.stdout
+    if rc:
+        git('reset', '-q', '--hard', pre)
+        return 'the tests fail after the merge: ' + ' / '.join(out.splitlines()[:4])[:400]
+    git('branch', '-d', f'task/{tid}')
+    line = next((l for l in plan_text(branch) if f'**{tid}**' in l), '')
+    state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
+    log(f'{tid}: merged ({state})')
+    # Published here, and only here: the merge has passed the test gate above, which is the thing
+    # that makes pushing it unattended defensible. A failed push is logged, not fatal — the merge
+    # landed locally and the next one pushes both. `drop_if_merged` then has its answer immediately,
+    # so a merged task branch leaves the remote instead of accumulating there.
+    #
+    # `[git] push_merge = false` is for the other policy — the merge stays local until a person has
+    # read it — and then the line below says what to run. Both are defensible and which one is right
+    # belongs to whoever owns the repository, so it is a key rather than a rule.
+    from ps2kit.checks import drop_if_merged, push
+    if cfg(False).push_merge:
+        if out := push(ROOT, branch):
             log(f'{tid}: {out}')
-        return None
+    elif cfg(False).push_remote:
+        log(f'{tid}: merged, not pushed ([git] push_merge is off): '
+            f'git push {cfg(False).push_remote} {branch}')
+    if out := drop_if_merged(ROOT, f'task/{tid}'):
+        log(f'{tid}: {out}')
+    return None
 
 
 def finish(tid: str, n: int, sid: str, branch: str) -> None:
@@ -721,8 +739,12 @@ def finish(tid: str, n: int, sid: str, branch: str) -> None:
     if why := merge(tid, branch):
         log(f'{tid}: LEFT FOR A HUMAN — {why}. Its {len(commits)} commits are on task/{tid}: '
             f'{" / ".join(commits)[:300]}')
+        # Parked as wip/<ID>: a task/<ID> ahead of the branch reads as finished-and-waiting to pick(), which
+        # would then skip the task for good; as wip/ the task can start again with the old attempt to read.
+        if not git('branch', '-M', f'task/{tid}', f'wip/{tid}').returncode:
+            log(f'{tid}: its branch is parked as wip/{tid}; the task stays open and can start again')
         from ps2kit.checks import push  # an unmerged branch is the one copy of that work: get it off this disk
-        if out := push(ROOT, f'task/{tid}'):
+        if out := push(ROOT, f'wip/{tid}'):
             log(f'{tid}: {out}')
 
 
@@ -970,6 +992,7 @@ def cmd_run(argv: list[str]) -> int:
         + (f', weekly usage {weekly()}%' if not a.force else ' (weekly cap ignored)'))
 
     # branches a previous run never merged (it was stopped, or a session ended while nothing watched)
+    merge_mark().unlink(missing_ok=True)  # a run killed mid-merge never removed it
     held = {l.removeprefix('branch refs/heads/') for l in
             git('worktree', 'list', '--porcelain').stdout.splitlines() if l.startswith('branch ')}
     open_ids = {m.group(1) for l in plan_text(branch) if (m := TASK.match(l))}
