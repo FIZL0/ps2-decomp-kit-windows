@@ -9,5 +9,5 @@ publish.workspace = true
 # interpreter and the arithmetic are our own crates, FIZL0/ps2-oracle and FIZL0/ps2-float, pinned by tag
 # (fix them there, tag a release and bump the tag here: see AGENT.md). Cargo fetches them once.
 [dependencies]
-ps2-oracle = { git = "https://github.com/FIZL0/ps2-oracle", tag = "v0.1.2" }
+ps2-oracle = { git = "https://github.com/FIZL0/ps2-oracle", tag = "v0.1.3" }
 ps2-float = { git = "https://github.com/FIZL0/ps2-float", tag = "v0.3.0" }
