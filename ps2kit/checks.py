@@ -124,6 +124,15 @@ def _cap_build_dirs(cwd: Path) -> list[str]:
             gb = _du_gb(d)
             if gb <= cap:
                 continue
+            # Cargo's incremental caches (about half of it, only the workspace's own crates) go first: a
+            # full clean rebuilds every dependency too, and a compiler cache often misses those across
+            # worktrees (path or patched crates hash per checkout).
+            for inc in [*d.glob('*/incremental'), *d.glob('*/*/incremental')]:
+                shutil.rmtree(inc, ignore_errors=True)
+            if (gb2 := _du_gb(d)) <= cap:
+                said.append(f'{d.name} was {gb:.0f} GB (cap {cap:.0f}): dropped its incremental caches ({gb2:.0f} GB now)')
+                print(said[-1], flush=True)
+                continue
             said.append(f'{d.name} is {gb:.0f} GB (cap {cap:.0f}): cleaning it before the tests')
             print(said[-1], flush=True)
             subprocess.run(clean.format(dir=str(d)), shell=True, cwd=str(cwd),

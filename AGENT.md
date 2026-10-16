@@ -76,6 +76,8 @@ rest of the session. `docs/CONTEXT.md` explains each measure; the short version:
   reach for do not exist). Read files by line range. Never dump a whole log.
 - `kit check` for tests, not the raw build command — it reduces a build log to one line, and it
   distinguishes "the build broke" from "a test failed", which is the only thing you need to know.
+  While working run only the tests you touched (`kit check -p <crate> <filter>`): the check slots are
+  shared by every agent and a full-suite run holds one for minutes. The full suite runs once, in `kit done`.
 - `kit plan brief <ID>` gives you a task's entire starting context in one call: its line, its own file,
   its journal, the files it names and their recent commits. Use it instead of gathering that yourself.
 - Don't grep the repo to find where things live. `PLAN.md`'s code map says.
