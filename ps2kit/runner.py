@@ -168,7 +168,7 @@ def tasks(branch: str) -> list[tuple[str, str, set[str]]]:
             section = l[4:]
             continue
         m = TASK.match(l)
-        if not m or section.startswith('Stretch') or 'split into' in l:
+        if not m or section.startswith('Stretch') or '(split into' in l:
             continue
         tid, rest = m.group(1), m.group(2)
         # a parent whose own subtasks are open: those run instead of it
