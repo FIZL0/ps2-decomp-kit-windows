@@ -466,6 +466,15 @@ def test_runner_picking():
     check(second[1] != first[1], 'an ordered section runs one task at a time', str(second[:2]))
     check(not (second[2] & first[2]), 'and mode d keeps the second task off the first one\'s files')
     eq(R.pick({}, {t[0] for t in ts}, 'd', 'main'), None, 'nothing left once everything has been tried')
+    real = R.plan_text
+    R.plan_text = lambda b: ['### Next', '- [ ] **A1** (split into A1a–b) all subtasks ticked',
+                             '- [ ] **B2** (split into B2a–b)', '- [~] **B2a** blocked',
+                             '- [ ] **C3** split into two tabs', '- [ ] **D4** (split into D4a–b)', '- [ ] **D4a**']
+    try:
+        eq([t[0] for t in R.tasks('main')], ['A1', 'C3', 'D4a'],
+           'a split parent runs once its subtasks are ticked, waits on blocked ones, and "split into" in prose is no parent')
+    finally:
+        R.plan_text = real
 
 
 def test_runner_union():

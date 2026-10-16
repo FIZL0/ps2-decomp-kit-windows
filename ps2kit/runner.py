@@ -14,7 +14,7 @@ already pasted into the first turn, waits for it to finish, merges the branch, a
 What it has to get right, and why each of these is here rather than left to the agent:
 
 **Task picking** goes down `plan/TODO.md` in order and skips: blocked tasks (`[~]`), split parents (a task
-whose own subtasks are open), tasks whose `(after X)` dependency is still open, the `### Stretch` section,
+whose own subtasks are open or blocked), tasks whose `(after X)` dependency is still open, the `### Stretch` section,
 anything already tried this run, and anything whose branch is finished and waiting to be merged. Siblings
 (`L3a`, `L3b` — same prefix+number) never run at once in any mode, because they are the same code by
 definition. Mode `d` additionally keeps two running tasks off the same files, which are named on each task's
@@ -161,17 +161,18 @@ def tasks(branch: str) -> list[tuple[str, str, set[str]]]:
     """Open tasks in plan/TODO.md order: (id, section, files named on the line)."""
     from ps2kit import plan as P
     ls = plan_text(branch)
-    open_ids = {m.group(1) for l in ls if (m := TASK.match(l))}
+    # [ ] and [~] (blocked) both count as not done: a split parent runs only once its subtasks are all ticked
+    open_ids = {m.group(1) for l in ls if (m := ANY_TASK.match(l)) and not l.startswith('- [x]')}
     out, section = [], ''
     for l in ls:
         if l.startswith('### '):
             section = l[4:]
             continue
         m = TASK.match(l)
-        if not m or section.startswith('Stretch') or '(split into' in l:
+        if not m or section.startswith('Stretch'):
             continue
         tid, rest = m.group(1), m.group(2)
-        # a parent whose own subtasks are open: those run instead of it
+        # a parent whose own subtasks are open or blocked: those come first
         if any(o != tid and o.startswith(tid) and o[len(tid)].isdigit() != tid[-1].isdigit()
                for o in open_ids):
             continue
