@@ -168,8 +168,12 @@ def _segment(cmd: str, pos: int) -> str:
 GIT_MOVES = re.compile(r'\bgit\b[^;&|\n]*\b(commit|push|merge|reset|pull|rebase|cherry-pick|stash)(?![\w-])')
 
 
-def _run_merging(cwd: str | None) -> str | None:
+def _run_merging(cwd: str | None, cmd: str) -> str | None:
     """The task a `kit run` is merging into the main checkout that `cwd` is in, if any (its marker is fresh)."""
+    # the command's own `git -C DIR` or last `cd DIR` names the repo, not the session's cwd
+    m = re.search(r'\bgit\s+-C\s+(\S+)', cmd) or ([None] + list(re.finditer(r'(?:^|[;&|(]\s*)cd\s+(\S+)', cmd)))[-1]
+    if m and os.path.isdir(d := os.path.join(cwd or '.', os.path.expanduser(m.group(1).strip('"\'')))):
+        cwd = d
     try:
         d = [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=cwd or None,
                             capture_output=True, text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
@@ -206,7 +210,7 @@ def decide(ev: dict) -> tuple[int, str, dict | None]:
         return 0, '', None
 
     # a run is testing its merge in the main checkout: a commit or push on top publishes it untested
-    if GIT_MOVES.search(cmd) and (tid := _run_merging(ev.get('cwd'))):
+    if GIT_MOVES.search(cmd) and (tid := _run_merging(ev.get('cwd'), cmd)):
         return 2, (f'`kit run` is testing its merge of task/{tid} in this checkout (a few minutes): don\'t '
                    'commit, push or move the branch until it finishes. Do other work, then retry.'), None
 
@@ -381,7 +385,7 @@ def self_test() -> int:
                              capture_output=True, text=True).stdout.strip()
     (Path(git_dir) / 'kit-run-merge').write_text('T1')
     for cmd, want in (('git commit -m x -- a', 2), ('git push origin main', 2), ('git status', 0),
-                      ('git merge-base a b', 0)):
+                      ('git merge-base a b', 0), (f'cd {tmp.name} && git push', 0)):
         if decide({'tool_name': 'Bash', 'cwd': str(repo), 'tool_input': {'command': cmd}})[0] != want:
             bad += 1
             print(f'FAIL with the merge marker, {cmd!r} should give {want}')
