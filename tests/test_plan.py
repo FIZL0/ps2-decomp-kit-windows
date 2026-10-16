@@ -591,6 +591,83 @@ def test_runner_fixer():
                 os.environ.pop(k, None)
 
 
+def test_runner_merge():
+    print('run: a merge is tested in its own worktree, so the main checkout is never blocked or reset')
+    from ps2kit import runner as R
+    import ps2kit.config as C
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / 'r'
+        (repo / 'context' / 'notes').mkdir(parents=True)
+        (repo / 'plan').mkdir()
+        run = lambda *a: subprocess.run(['git', *a], cwd=str(repo), capture_output=True, text=True)
+        run('init', '-q', '-b', 'main')
+        run('config', 'user.email', 't@example.invalid')
+        run('config', 'user.name', 'test')
+        (repo / '.gitignore').write_text('context/\n', encoding='utf-8')
+        (repo / 'plan' / 'TODO.md').write_text('# todo\n', encoding='utf-8')
+        (repo / 'plan' / 'DONE.md').write_text('# done\n', encoding='utf-8')
+        (repo / 'code.rs').write_text('a\n', encoding='utf-8')
+        run('add', '-A'); run('commit', '-qm', 'base')
+
+        def task(tid, files, behind=False):
+            run('checkout', '-q', '-b', f'task/{tid}')
+            for f, text in files.items():
+                (repo / f).write_text(text, encoding='utf-8')
+            run('add', *files); run('commit', '-qm', tid)
+            run('checkout', '-q', 'main')
+            if behind:  # main moves on, so the merge is new code and gets tested
+                (repo / f'{tid}.main').write_text('m\n', encoding='utf-8')
+                run('add', f'{tid}.main'); run('commit', '-qm', f'main before {tid}')
+
+        during = []  # (file, text) a session commits on main while the tests run
+
+        def kit_in(d, *a):
+            if a[:1] == ('check',):
+                for f, text in during:
+                    (repo / f).write_text(text, encoding='utf-8')
+                    run('commit', '-qm', f'session {f}', '--', f) if (repo / f).exists() and \
+                        run('ls-files', f).stdout else (run('add', f), run('commit', '-qm', f'session {f}'))
+                during.clear()
+                bad = (Path(d) / 'FAIL').exists()
+                return subprocess.CompletedProcess([], int(bad), 'TESTS FAILED\n' if bad else 'TESTS PASSED\n', '')
+            return subprocess.CompletedProcess([], 0, '', '')
+
+        saved = R.ROOT, R.SLOTS_DIR, R.cfg, R.kit_in, C.ROOT
+        R.ROOT, C.ROOT, R.SLOTS_DIR, R.kit_in = repo, repo, Path(tmp) / 'slots', kit_in
+        R.cfg = lambda required=False: Config(raw={'paths': {'context': 'context'}, 'git': {'push_merge': False}})
+        try:
+            # 1: lands; an uncommitted edit elsewhere in the main checkout stays put
+            task('T1', {'t1.rs': '1\n'}, behind=True)
+            (repo / 'plan' / 'TODO.md').write_text('# todo\nmine\n', encoding='utf-8')
+            eq(R.merge('T1', 'main'), None, 'a clean merge lands')
+            check((repo / 't1.rs').exists(), 'and its work is in the main checkout')
+            check('mine' in (repo / 'plan' / 'TODO.md').read_text(), 'an uncommitted edit there is untouched')
+            eq(run('stash', 'list').stdout, '', 'and nothing went into a stash')
+            run('checkout', '-q', '--', 'plan/TODO.md')
+
+            # 2: a session commits code on main during the tests: the merge is tested again on top of it
+            task('T2', {'t2.rs': '2\n'}, behind=True)
+            during.append(('code.rs', 'a\nsession\n'))
+            eq(R.merge('T2', 'main'), None, 'a merge whose branch moved during the tests still lands')
+            log = run('log', '--format=%s', 'main').stdout
+            check('session code.rs' in log and 't2.rs' in run('ls-files').stdout,
+                  "both the session's commit and the task are on main", log)
+            check(run('merge-base', '--is-ancestor', 'HEAD~0', 'main').returncode == 0 and
+                  'tested merge, onto' not in run('log', '-1', '--format=%s', 'main').stdout,
+                  'it was rebuilt on the new main rather than merged onto it untested')
+
+            # 3: failing tests leave main exactly where it was
+            task('T3', {'FAIL': 'x\n'}, behind=True)
+            before = run('rev-parse', 'main').stdout
+            why = R.merge('T3', 'main')
+            check(why is not None and 'tests fail' in why, 'failing tests are reported', str(why))
+            eq(run('rev-parse', 'main').stdout, before, 'and main never moved')
+            check(not (repo / 'FAIL').exists(), 'and the main checkout never saw the failing merge')
+        finally:
+            R.ROOT, R.SLOTS_DIR, R.cfg, R.kit_in, C.ROOT = saved
+
+
 def test_stop_hook_never_crashes():
     print('run: the Stop hook that ends an idle session')
     for payload in ('{}', 'garbage', '{"transcript_path": "/nonexistent"}', '{"transcript_path": null}'):
@@ -614,7 +691,7 @@ def main() -> int:
     for t in (test_plan_roundtrip, test_plan_index_and_sections, test_brief, test_shipped_backlog,
               test_atomic_write, test_journal, test_check_summary, test_audit, test_guard, test_inbox,
               test_runner_picking,
-              test_runner_union, test_runner_fixer, test_stop_hook_never_crashes, test_cli_help):
+              test_runner_union, test_runner_fixer, test_runner_merge, test_stop_hook_never_crashes, test_cli_help):
         t()
     print()
     if FAILED:

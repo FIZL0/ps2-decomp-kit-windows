@@ -517,26 +517,27 @@ def addresses(text: str, where: str) -> str | None:
     return '\n'.join(kept)
 
 
-def union(files: list[str], tid: str, branch: str) -> bool:
+def union(files: list[str], tid: str, branch: str, cwd: Path | None = None) -> bool:
     """Join both sides of a conflict in every file `joinable` allows: two agents both added lines, and
     both sets belong. Then drop a task line that came out twice, any TODO line whose task DONE.md already
     has, and — in the address list, which cannot be joined blind — a name both sides gave the same address.
     """
     from ps2kit import plan as P
+    cwd = cwd or ROOT
     orel = str(Path(cfg(False).oracle_file).relative_to(ROOT)) \
         if Path(cfg(False).oracle_file).is_relative_to(ROOT) else None
     for f in sorted(files, key=lambda f: not f.endswith('DONE.md')):  # DONE.md first: TODO.md reads it
         sides = []
         for stage in (2, 1, 3):  # ours, base, theirs
             t = cfg(False).ctx(f'notes/union.{stage}')
-            t.write_text(git('show', f':{stage}:{f}').stdout, encoding='utf-8')
+            t.write_text(git('show', f':{stage}:{f}', cwd=cwd).stdout, encoding='utf-8')
             sides.append(str(t))
-        out = git('merge-file', '-p', '--union', *sides)
+        out = git('merge-file', '-p', '--union', *sides, cwd=cwd)
         if out.returncode < 0:
             return False
         text = out.stdout
         if f.endswith(('TODO.md', 'DONE.md')):
-            done_path = Path(cfg(False).plan) / 'DONE.md'
+            done_path = cwd / Path(cfg(False).plan).relative_to(ROOT) / 'DONE.md'
             done = {m.group(1).rstrip('.') for l in P.lines(done_path)
                     if (m := ANY_TASK.match(l)) and '- [x]' in l} if f.endswith('TODO.md') else set()
             mine = git('show', f'task/{tid}:{f}').stdout.splitlines()
@@ -555,8 +556,8 @@ def union(files: list[str], tid: str, branch: str) -> bool:
             text = '\n'.join(kept)
         elif f == orel and (text := addresses(text, f)) is None:
             return False
-        (ROOT / f).write_text(text, encoding='utf-8')
-        git('add', f)
+        (cwd / f).write_text(text, encoding='utf-8')
+        git('add', f, cwd=cwd)
     return True
 
 
@@ -578,8 +579,7 @@ direction and say so.
 {tid}'s work: a conflict is all that is in front of you.
 3. Then `git commit --no-edit` to land the merge. Then stop. Do not push, do not run the test suite (the \
 runner runs it as soon as you are done, and the agents are using the build directories), do not merge, \
-rebase or delete anything else, do not touch the worktrees under .worktrees/ or `git stash` — the runner \
-is holding the checkout's own edits in a stash and will put them back.
+rebase or delete anything else, do not touch the other worktrees under .worktrees/ or `git stash`.
 4. If it cannot be resolved honestly — the two sides contradict each other and picking needs a human — run \
 `git merge --abort` and say why in one line. That is a real answer, not a failure.
 
@@ -595,8 +595,8 @@ def fix_log(line: str) -> None:
         fh.write(line.rstrip() + '\n')
 
 
-def fix_merge(tid: str, branch: str, files: list[str]) -> str | None:
-    """Give a conflict git could not join to a Claude session, in the main checkout. None when it landed.
+def fix_merge(tid: str, branch: str, files: list[str], cwd: Path | None = None) -> str | None:
+    """Give a conflict git could not join to a Claude session, in `cwd` (the merge worktree). None when it landed.
 
     One session per merge, run to completion while the caller waits — the merge lock is already held, so
     there is nothing to be gained from doing it in the background and plenty to lose. Each one starts with
@@ -608,6 +608,7 @@ def fix_merge(tid: str, branch: str, files: list[str]) -> str | None:
     every conflict of this kind.
     """
     c = cfg(False)
+    cwd = cwd or ROOT
     if not c.fix_merges:
         return 'conflicts a join cannot resolve, and [run] fix_merges is off'
     history = ''.join(open(c.ctx('notes/master.md'), encoding='utf-8').readlines()[-12:]) \
@@ -620,17 +621,17 @@ def fix_merge(tid: str, branch: str, files: list[str]) -> str | None:
         fh.write(f'\n=== {dt.datetime.now().isoformat(timespec="seconds")} {tid} '
                  f'{", ".join(files)}\n')
         try:
-            r = sp.run(fix_cmd(prompt), cwd=str(ROOT), stdout=fh, stderr=sp.STDOUT,
+            r = sp.run(fix_cmd(prompt), cwd=str(cwd), stdout=fh, stderr=sp.STDOUT,
                        timeout=c.fix_timeout)
         except FileNotFoundError:
             return f'no agent command to fix the conflicts with (KIT_AGENT={os.environ.get("KIT_AGENT", "claude")})'
         except sp.TimeoutExpired:
             fix_log(f'{tid}: fixer timed out after {c.fix_timeout}s — left for a human')
             return f'the session fixing the conflicts ran past {c.fix_timeout}s'
-    if git('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode == 0:
+    if git('rev-parse', '--verify', '-q', 'MERGE_HEAD', cwd=cwd).returncode == 0:
         fix_log(f'{tid}: fixer left the merge unfinished — left for a human')
         return f'the session did not finish the merge (exit {r.returncode}); see {logfile.relative_to(ROOT)}'
-    if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
+    if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD', cwd=cwd).returncode:
         fix_log(f'{tid}: fixer aborted the merge — left for a human')
         return f'the session aborted the merge; its reason is in {logfile.relative_to(ROOT)}'
     fix_log(f'{tid}: conflicts in {", ".join(files)} resolved by a session')
@@ -641,72 +642,76 @@ def fix_merge(tid: str, branch: str, files: list[str]) -> str | None:
 def merge(tid: str, branch: str) -> str | None:
     """Merge task/<tid> into the default branch: merge, archive ticks, run the tests, delete the branch.
 
+    The merge is built and tested on a copy of the branch in its own worktree (`<repo>-slots/smerge`) and the
+    branch only moves once the tests pass, so the main checkout never holds an untested merge: people and
+    sessions there keep committing and pushing the whole time, and nothing is reset under them. (It used to
+    be merged and tested in the main checkout behind a marker the guard hook enforced, which refused every
+    commit there for the length of a test run.)
+
     Returns None when it landed, else why it was left alone (the target branch is then as it was, and the
     branch is still there for a human to look at).
     """
     with MERGE:
-        # While the branch holds a merge whose tests have not passed, nothing else may commit or push on it:
-        # a push there publishes the untested merge, and a failing test then resets the branch under that
-        # commit. The guard hook (ps2kit/hooks/guard.py) refuses such git commands while the marker exists.
-        m = merge_mark()
-        m.write_text(tid, encoding='utf-8')
+        d = worktree('merge', branch)
+        git('merge', '--abort', cwd=d), git('reset', '-q', '--hard', cwd=d), git('clean', '-fdq', cwd=d)
         try:
-            return _merge(tid, branch)
+            return _merge(tid, branch, d)
         finally:
-            m.unlink(missing_ok=True)
+            git('merge', '--abort', cwd=d)  # a conflict left there
+            git('checkout', '-q', '--detach', cwd=d)
 
 
-def merge_mark() -> Path:
-    """The file that says a run is merging into the default branch (it holds the task ID)."""
-    return Path(ROOT, git('rev-parse', '--git-common-dir').stdout.strip(), 'kit-run-merge')
+def kit_in(d: Path, *a: str) -> sp.CompletedProcess:
+    """`./kit <a>` in checkout d, with this checkout's kit.toml (it is not in git, so not in the worktree)."""
+    from ps2kit.config import _config_path
+    env = {**os.environ, 'KIT_CONFIG': os.environ.get('KIT_CONFIG') or str(_config_path())}
+    return sp.run([sys.executable, str(d / 'kit'), *a], cwd=str(d), capture_output=True, text=True, env=env)
 
 
-def _merge(tid: str, branch: str) -> str | None:
-    """merge()'s body, under MERGE and the marker."""
-    if git('diff', '--name-only', '--diff-filter=U').stdout.strip():
-        return 'the main checkout has unmerged paths left over: fix them first'
-    cur = git('branch', '--show-current').stdout.strip()
-    if cur != branch and git('checkout', '-q', branch).returncode:
-        return f'the main checkout is on {cur or "a detached HEAD"} and would not switch to {branch}'
-    # somebody's uncommitted edits in the checkout: out of the way for the merge, back right after
-    stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) and \
-        not git('stash', 'push', '-q', '-m', f'kit run {tid}').returncode
-    pre = git('rev-parse', 'HEAD').stdout.strip()
-    try:
-        if git('merge', '--no-edit', f'task/{tid}').returncode:
-            files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-            if not [f for f in files if not joinable(f)] and union(files, tid, branch):
-                git('commit', '-q', '--no-edit')
+def _merge(tid: str, branch: str, d: Path) -> str | None:
+    """merge()'s body, under MERGE, with d the merge worktree.
+
+    Code commits that reach the branch while the tests run aren't covered by the tested commit, so it is
+    built and tested again on top of them (three tries, then it lands anyway, as any two commits on the
+    branch would); markdown-only ones don't need it and the tested commit is merged onto them.
+    """
+    for attempt in range(3):
+        base = git('rev-parse', branch).stdout.strip()
+        git('checkout', '-q', '--detach', base, cwd=d)
+        if git('merge', '--no-edit', '-m', f"Merge branch 'task/{tid}'", f'task/{tid}', cwd=d).returncode:
+            files = git('diff', '--name-only', '--diff-filter=U', cwd=d).stdout.split()
+            if not [f for f in files if not joinable(f)] and union(files, tid, branch, d):
+                git('commit', '-q', '--no-edit', cwd=d)
                 log(f'{tid}: joined both sides of {", ".join(files)}')
             else:
                 # A join either cannot be trusted here or refused: start the conflict again from a
                 # clean state (a refused join may have written some of its files already) and give it
                 # to a session that can read it.
-                git('merge', '--abort')
-                git('merge', '--no-edit', f'task/{tid}')
-                if why := fix_merge(tid, branch, files):
-                    git('merge', '--abort')
+                git('merge', '--abort', cwd=d)
+                git('merge', '--no-edit', '-m', f"Merge branch 'task/{tid}'", f'task/{tid}', cwd=d)
+                if why := fix_merge(tid, branch, files, d):
                     return why
-        sp.run([sys.executable, str(ROOT / 'kit'), 'plan', 'archive'], cwd=str(ROOT), capture_output=True)
+        kit_in(d, 'plan', 'archive')
         plan_files = [str(Path(cfg(False).plan).relative_to(ROOT) / n) for n in ('TODO.md', 'DONE.md')]
-        if git('status', '--porcelain', '--', *plan_files).stdout.strip():
-            git('commit', '-qm', f'{tid}: archive ticked tasks', '--', *plan_files)
-    finally:
-        if stashed and git('stash', 'pop', '-q').returncode:
-            git('reset', '-q', '--hard')
-            log(f'{tid}: the checkout\'s own edits clash with the merge; kept in git stash "kit run {tid}"')
-    if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
-        return f'the merge did not land in {branch} (it changed underneath); merge it again'
-    # the agent's kit done already passed the tests on the branch: rerun them only if the merged code
-    # differs from what it tested (a markdown-only difference is not code)
-    merged_diff = git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split()
-    rc, out = 0, ''
-    if not all(f.endswith('.md') for f in merged_diff):
-        chk = sp.run([sys.executable, str(ROOT / 'kit'), 'check'], cwd=str(ROOT), capture_output=True, text=True)
-        rc, out = chk.returncode, chk.stdout
-    if rc:
-        git('reset', '-q', '--hard', pre)
-        return 'the tests fail after the merge: ' + ' / '.join(out.splitlines()[:4])[:400]
+        if git('status', '--porcelain', '--', *plan_files, cwd=d).stdout.strip():
+            git('commit', '-qm', f'{tid}: archive ticked tasks', '--', *plan_files, cwd=d)
+        merged = git('rev-parse', 'HEAD', cwd=d).stdout.strip()
+        # the agent's ./kit done already passed the tests on the branch: rerun them only if the merged code
+        # differs from what it tested (a markdown-only difference is not code)
+        if not all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', merged).stdout.split()):
+            chk = kit_in(d, 'check')
+            if chk.returncode:
+                return 'the tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
+        moved = git('diff', '--name-only', base, branch).stdout.split()
+        if attempt < 2 and not all(f.endswith('.md') for f in moved):
+            log(f'{tid}: {branch} got code commits during the tests ({", ".join(moved[:5])}); testing the merge again')
+            continue
+        why = land(tid, branch, merged)
+        if why == 'conflict' and attempt < 2:
+            continue
+        if why:
+            return why
+        break
     git('branch', '-d', f'task/{tid}')
     line = next((l for l in plan_text(branch) if f'**{tid}**' in l), '')
     state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
@@ -728,6 +733,41 @@ def _merge(tid: str, branch: str) -> str | None:
             f'git push {cfg(False).push_remote} {branch}')
     if out := drop_if_merged(ROOT, f'task/{tid}'):
         log(f'{tid}: {out}')
+    return None
+
+
+def land(tid: str, branch: str, merged: str) -> str | None:
+    """Move the branch in the main checkout to the tested merge: seconds, not a test run. None when it
+    landed, 'conflict' when the branch's new commits clash with it (the caller builds it again on top),
+    else why it could not.
+
+    Uncommitted edits in the main checkout are never moved aside: git refuses, before starting, a merge
+    that would change a file somebody is editing, so this waits for them to commit it (a stash used to
+    hold them, and a pop that clashed left the work in a stash nobody looked at).
+    """
+    t0 = time.time()
+    while git('diff', '--name-only', '--diff-filter=U').stdout.strip() or \
+            git('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode == 0:
+        if time.time() - t0 > 60 * 60:
+            return 'the main checkout has a merge or unmerged paths of its own, for 60 min'
+        time.sleep(10)
+    cur = git('branch', '--show-current').stdout.strip()
+    if cur != branch and git('checkout', '-q', branch).returncode:
+        return f'the main checkout is on {cur or "a detached HEAD"} and would not switch to {branch}'
+    msg = ['-m', f'{tid}: its tested merge, onto commits {branch} got during the tests']
+    while git('merge', '-q', *msg, merged).returncode and \
+            git('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode:
+        if time.time() - t0 > 60 * 60:
+            return 'uncommitted edits in the main checkout to files the merge changes, for 60 min'
+        time.sleep(10)
+    if git('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode == 0:
+        files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
+        if [f for f in files if not joinable(f)] or not union(files, tid, branch):
+            git('merge', '--abort')
+            return 'conflict'
+        git('commit', '-q', '--no-edit')
+    if git('merge-base', '--is-ancestor', merged, 'HEAD').returncode:
+        return f'the merge did not land in {branch}; merge it again'
     return None
 
 
@@ -993,7 +1033,6 @@ def cmd_run(argv: list[str]) -> int:
         + (f', weekly usage {weekly()}%' if not a.force else ' (weekly cap ignored)'))
 
     # branches a previous run never merged (it was stopped, or a session ended while nothing watched)
-    merge_mark().unlink(missing_ok=True)  # a run killed mid-merge never removed it
     held = {l.removeprefix('branch refs/heads/') for l in
             git('worktree', 'list', '--porcelain').stdout.splitlines() if l.startswith('branch ')}
     open_ids = {m.group(1) for l in plan_text(branch) if (m := TASK.match(l))}
