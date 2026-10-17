@@ -674,6 +674,38 @@ def test_runner_merge():
             check(why is not None and 'tests fail' in why, 'failing tests are reported', str(why))
             eq(run('rev-parse', 'main').stdout, before, 'and main never moved')
             check(not (repo / 'FAIL').exists(), 'and the main checkout never saw the failing merge')
+            run('branch', '-D', 'task/T3')
+
+            # 4: finished tasks queued on the lock land together, built and tested once; one that conflicts
+            # is left out and merges alone, and a batch that fails its tests falls back to one at a time
+            checks = []
+            counted = R.kit_in
+            R.kit_in = lambda d, *a: (checks.append(a) if a[:1] == ('check',) else None, counted(d, *a))[1]
+            for t in ('T4', 'T5', 'T6'):
+                task(t, {f'{t.lower()}.rs': t + '\n'})
+            task('T7', {'code.rs': 'a\nT7\n'}, behind=True)
+            (repo / 'code.rs').write_text('a\nmain\n', encoding='utf-8')
+            run('commit', '-qm', 'main edits code.rs', '--', 'code.rs')
+            R.WAITING.extend(['T5', 'T7', 'T6'])  # queued behind T4, as their finish() threads would be
+            eq(R.merge('T4', 'main'), None, 'the first queued task lands')
+            check(all((repo / f't{n}.rs').exists() for n in (4, 5, 6)), 'and the clean ones landed with it')
+            eq(len(checks), 1, 'tested once for all three')
+            check('T7' not in (repo / 'code.rs').read_text(), 'the conflicting one never reached main inside the batch')
+            eq([R.merge(t, 'main') for t in ('T5', 'T6')], [None, None], "the batched ones' own merges return at once")
+            R.WAITING.remove('T7')  # its thread queued once; its own merge() queues it again below
+            R.merge('T7', 'main')  # alone, with its own conflict handling (the fixer stub from above resolves it)
+            eq(len(checks), 2, 'and was tested on its own')
+            eq((R.WAITING, R.LANDED), ([], set()), 'nothing is left queued')
+
+            checks.clear()
+            task('T8', {'t8.rs': '8\n'}, behind=True)
+            task('T9', {'FAIL': 'x\n'})
+            R.WAITING.append('T9')
+            eq(R.merge('T8', 'main'), None, 'a failed batch: the good task lands alone')
+            check((repo / 't8.rs').exists() and not (repo / 'FAIL').exists(), 'without the failing one')
+            R.WAITING.remove('T9')
+            check('tests fail' in str(R.merge('T9', 'main')), 'which fails on its own merge, against itself')
+            eq((R.WAITING, R.LANDED), ([], set()), 'nothing is left queued')
         finally:
             R.ROOT, R.SLOTS_DIR, R.cfg, R.kit_in, C.ROOT = saved
 
