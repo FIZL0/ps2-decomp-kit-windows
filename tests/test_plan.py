@@ -99,6 +99,16 @@ def test_plan_roundtrip():
         eq(plan.archive(todo, done), 0, 'archive is a no-op the second time')
         eq([l[4:] for l in plan.index(todo) if l.startswith('[ ] ')], ['F1'], 'one open task left')
 
+        # a split parent goes once its subtasks are all done, not while one is open or blocked; P170 isn't P17's
+        Path(todo).write_text('# T\n\n### S\n\n- [ ] **P17** (split into P17a–b)\n- [x] **P17b** b\n'
+                              '- [ ] **P170** x\n- [ ] **Q1** (split into Q1a–b)\n- [~] **Q1a** a\n', encoding='utf-8')
+        Path(done).write_text('# Done\n\n### S\n\n- [x] **P17a** a\n- [x] **Q1b** b\n', encoding='utf-8')
+        plan._cache.clear()
+        eq(plan.archive(todo, done), 2, 'archive moves the ticked subtask and its finished parent')
+        eq([l for l in plan.index(todo) if l.startswith('[')], ['[ ] P170', '[ ] Q1', '[~] Q1a'],
+           'a parent with a blocked subtask stays')
+        has(Path(done).read_text(), r'- \[x\] \*\*P17\*\* \(split into', 'the finished parent is in DONE.md')
+
         check(not list(Path(d).glob('*.tmp')), 'no .tmp files left behind by the atomic writes')
 
         # an unchanged file is never rewritten: mtime-stamped caches and git both care

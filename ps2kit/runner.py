@@ -639,6 +639,12 @@ def fix_merge(tid: str, branch: str, files: list[str], cwd: Path | None = None) 
     return None
 
 
+def untestable(f: str) -> bool:
+    """A change `./kit check` can't see: markdown, or CI config. A commit like that landing mid-test used to
+    throw away a whole test run and start it again (opentennis B535, 2026-10-16)."""
+    return f.endswith('.md') or f.startswith('.github/')
+
+
 def merge(tid: str, branch: str) -> str | None:
     """Merge task/<tid> into the default branch: merge, archive ticks, run the tests, delete the branch.
 
@@ -698,12 +704,12 @@ def _merge(tid: str, branch: str, d: Path) -> str | None:
         merged = git('rev-parse', 'HEAD', cwd=d).stdout.strip()
         # the agent's ./kit done already passed the tests on the branch: rerun them only if the merged code
         # differs from what it tested (a markdown-only difference is not code)
-        if not all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', merged).stdout.split()):
+        if not all(map(untestable, git('diff', '--name-only', f'task/{tid}', merged).stdout.split())):
             chk = kit_in(d, 'check')
             if chk.returncode:
                 return 'the tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
         moved = git('diff', '--name-only', base, branch).stdout.split()
-        if attempt < 2 and not all(f.endswith('.md') for f in moved):
+        if attempt < 2 and not all(map(untestable, moved)):
             log(f'{tid}: {branch} got code commits during the tests ({", ".join(moved[:5])}); testing the merge again')
             continue
         why = land(tid, branch, merged)

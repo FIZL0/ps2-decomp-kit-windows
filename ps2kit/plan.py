@@ -163,8 +163,26 @@ def ensure(todo=None, done=None) -> tuple[str, str]:
     return todo, done
 
 
+def _child(parent: str, tid: str) -> bool:
+    """P17 -> P17a, P11k -> P11k1: the parent's id plus a character of the other kind (so P170 isn't P17's)."""
+    rest = tid[len(parent):]
+    return tid.startswith(parent) and bool(rest) and rest[0].isdigit() != parent[-1].isdigit()
+
+
+def _close_parents(ls: list[str], dl: list[str]) -> None:
+    """Tick each "(split into …)" parent whose subtasks are all done: some in DONE.md, none open in TODO.md."""
+    items = [(m.group(3).rstrip('.'), m.group(2)) for m in map(ITEM.match, ls + dl) if m]
+    for i, line in enumerate(ls):
+        m = ITEM.match(line)
+        if m and not m.group(1) and m.group(2) != 'x' and '(split into' in line:
+            kids = [box for t, box in items if _child(m.group(3).rstrip('.'), t)]
+            if kids and all(box == 'x' for box in kids):
+                _mark(ls, i, 'x')
+
+
 def archive(todo, done) -> int:
-    """Move every top-level [x] task (with its sub-lines) from todo into done, under the same ### heading.
+    """Move every top-level [x] task (with its sub-lines) from todo into done, under the same ### heading; a
+    "(split into …)" parent goes too once its subtasks are all done, so nobody has to tick an umbrella line.
 
     Needed because a merge can bring a tick in from a branch without moving the line, and because a human
     sometimes ticks by hand anyway. Running it is always safe.
@@ -172,6 +190,7 @@ def archive(todo, done) -> int:
     ls, dl, sec, moved = list(lines(todo)), list(lines(done)), '', 0
     if not dl:
         dl = ['# DONE — the archive', '']
+    _close_parents(ls, dl)
     i = 0
     while i < len(ls):
         if _level(ls[i]):
