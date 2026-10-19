@@ -87,6 +87,33 @@ regenerate later.
 
 ---
 
+## Clean-room ports: spec, then port
+
+An agent that reads a function and writes its port in the same session is copying, however it renames
+things, and a port that reproduces the original's quirks bit for bit looks exactly like a copy. Nothing
+here is a legal opinion, but the usual mitigation is cheap with agents: split the two jobs.
+
+1. **Spec session.** Read the decompilation and write `SPEC.md` in the task's own journal directory: what
+   the function does, in your own words; each constant by what it means (and its value); every quirk and
+   edge case, because a quirk is behaviour. No code, no addresses, no decompiler names, no offsets or field
+   order. End it with `## Open questions` (`none` when there are none), then
+   `kit done <ID> "<msg>" --spec`. That commits the spec without tests or a tick; the task stays open.
+2. **Port session.** The next brief sees the spec with no open questions and says *Port phase*: it pastes
+   the spec in and, in a runner worktree, writes `.cleanroom`, which makes the guard hook refuse the dumps,
+   Ghidra and `kit fn/xref/dis` for that session. Write the code from the spec, prove it with the oracle
+   and the recordings as usual. Something the spec does not answer goes under its `## Open questions`, then
+   `--spec` again, and a spec session answers it.
+
+`kit audit` refuses a `SPEC.md` with an address, offset or decompiler name in it, and any note with a
+pasted line of decompiled C. The runner does not count a `--spec` ending as the night's attempt, so the
+port phase can run once the spec is merged. In the main checkout the lock is not written (another session
+may be researching there): the brief's *Port phase* is the rule, nothing enforces it.
+
+Keep a `CREDITS.md` that says how the port is made and what that does and does not prove
+(template: [CREDITS.template.md](CREDITS.template.md)).
+
+---
+
 ## 3. Port it
 
 Rules in `AGENT.md`; the ones that come up in every task:
@@ -94,9 +121,9 @@ Rules in `AGENT.md`; the ones that come up in every task:
 - Simulation arithmetic goes through `ps2-float`, not host `f32`. Enable the float lint in those modules.
 - Name things for what they do, not where they were. No `FUN_…`, no addresses in the port. The address
   belongs in `research/oracle.txt` next to a name, and in the journal.
-- Match the structure of the original closely enough that a reader can hold them side by side. Tidy up
-  dead branches and the decompiler's artefacts; do not "improve" the algorithm. An improvement is a
-  behaviour change you have not noticed yet.
+- Match the original's *behaviour*, not its shape: your own structure and names, no dead branches or
+  decompiler artefacts. Do not "improve" the algorithm either. An improvement is a behaviour change you
+  have not noticed yet.
 - Keep the original's evaluation order. `(a + b) + c` and `a + (b + c)` are different numbers on this
   machine.
 

@@ -1,3 +1,38 @@
+# The root is a whitelist: a new top-level file or folder stays untracked until it is added here, so a dump
+# or a mesh written to the root by a tool (it happens) never reaches a commit. Add your own folders below.
+/*
+!/.claude/
+!/.github/
+!/crates/
+!/docs/
+!/fuzz/
+!/ghidra_scripts/
+!/plan/
+!/ps2kit/
+!/research/
+!/tests/
+!/tools/
+!/watch/
+!/.gitattributes
+!/.gitignore
+!/AGENT.md
+!/CLAUDE.md
+!/CREDITS.md
+!/Cargo.lock
+!/Cargo.toml
+!/LICENSE*
+!/PLAN.md
+!/README.md
+!/RETROSPECTIVE.md
+!/SETUP.md
+!/WINDOWS.md
+!/kit
+!/kit.cmd
+!/kit.ps1
+!/kit.toml.example
+# the clean-room port phase's marker (docs/WORKFLOW.md)
+.cleanroom
+
 # Everything derived from the game lives here. Never committed, by design:
 # extracted discs, ELFs, decompilation dumps, RAM images, captures, screenshots, logs.
 /context/

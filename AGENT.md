@@ -18,6 +18,10 @@ differently underneath (`WINDOWS.md`). Work in PowerShell 7 — these pages' exa
   *what* a function does is worth more than one saying where it lived. Addresses belong in
   `research/oracle.txt` and in journal entries — research notes, not product. `kit audit` checks this
   and `kit done` gates on it, so you find out before the commit rather than after the release.
+- **Simulation ports go spec first, then port, in two sessions.** One session reads the decompilation and
+  writes the task's `SPEC.md` (behaviour in plain words, no code, addresses or offsets); a second writes the
+  code from that spec and the tests with the decompilation locked. Why, and how: docs/WORKFLOW.md
+  *Clean-room ports*.
 - **Match the original exactly, where it matters.** Simulation behaviour — physics, AI, state machines,
   scoring, timing — is ported, not approximated, and proved against the original. No placeholders, no
   "close enough", no TODO left behind as if it were finished work.

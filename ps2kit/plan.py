@@ -382,7 +382,10 @@ def brief(tid: str, root=None, plan_dir=None, journal=None) -> list[str]:
       * its journal directory: the file list, and the newest entry pasted in (capped at JOURNAL_MAX chars,
         because the newest entry is where the last session said whose move it is),
       * the files named on the line: where they actually are, how long they are, and their last 3 commits —
-        so the session knows whether someone changed them yesterday before it reads a single one.
+        so the session knows whether someone changed them yesterday before it reads a single one,
+      * for a clean-room port (its journal has a `SPEC.md`, docs/WORKFLOW.md): which phase it is in. Open
+        questions in the spec → *Spec phase* (read the decompilation, answer them); none → *Port phase*
+        (write the code from the spec and the tests alone), with the spec pasted in.
 
     `kit run` pastes this into the agent's first turn.
     """
@@ -420,6 +423,22 @@ def brief(tid: str, root=None, plan_dir=None, journal=None) -> list[str]:
             out += [f'### {files[-1]}' + (f' (first {JOURNAL_MAX} chars)' if cut else ''),
                     body[:JOURNAL_MAX].rstrip()]
 
+    specs = [journal / j / 'SPEC.md' for j in own_j if (journal / j / 'SPEC.md').is_file()]
+    if specs:
+        rel = os.path.relpath(specs[-1], root)
+        body = specs[-1].read_text(encoding='utf-8', errors='replace')
+        asked = re.search(r'^## Open questions\s*\n(.*?)(?=^## |\Z)', body, re.M | re.S)
+        if asked and re.sub(r'^[\s-]*none\.?\s*$', '', asked.group(1), flags=re.M | re.I).strip():
+            out += ['', f'## Spec phase: answer the open questions in {rel}',
+                    'Read the decompilation, answer them in the spec (behaviour in your own words), empty the '
+                    f'section, `kit done {tid} "<msg>" --spec`, stop. No port code this session.']
+        else:
+            out += ['', f'## Port phase: implement from {rel} and the tests alone',
+                    'The decompilation is locked for this session (dumps, Ghidra, `kit fn/xref/dis`). Prove the '
+                    'port with the recordings and the oracle as usual. Something the spec does not say: write it '
+                    f'under `## Open questions` in the spec, `kit done {tid} "<msg>" --spec`, stop.', '',
+                    body.rstrip()]
+
     where = [p for p in files_on_line(text, root) if p != f'{plan_dir.name}/{tid}.md']
     if where:
         out += ['', '## Files on the line, and their last commits']
@@ -433,6 +452,23 @@ def brief(tid: str, root=None, plan_dir=None, journal=None) -> list[str]:
                 size = 'missing — this task creates it'
             out += [f'- `{t}` ({size})', *[f'  - {l[:120]}' for l in log]]
     return out
+
+
+def cleanroom(on: bool, tid: str = '', cwd=None) -> None:
+    """Lock (or unlock) the decompilation for the session in this checkout: the guard hook refuses it while
+    `.cleanroom` exists. Only in a worktree (a runner slot): in the main checkout another session may be
+    researching, so there the brief's *Port phase* is the rule and nothing enforces it."""
+    def rev(f):
+        return subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=cwd, capture_output=True,
+                              text=True).stdout.strip()
+    top = rev('--show-toplevel')
+    if not top:
+        return
+    lock = Path(top) / '.cleanroom'
+    if on and rev('--git-dir') != rev('--git-common-dir'):
+        lock.write_text(tid + '\n', encoding='utf-8')
+    elif not on and lock.exists():
+        lock.unlink()
 
 
 # --- the command ---------------------------------------------------------------
@@ -479,7 +515,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ['newid'] and len(argv) == 2:
         return say(next_id(argv[1]))
     if argv[:1] == ['brief'] and len(argv) == 2:
-        return say('\n'.join(brief(argv[1])))
+        out = brief(argv[1])
+        cleanroom(any(l.startswith('## Port phase') for l in out), argv[1])
+        return say('\n'.join(out))
     if argv == ['archive']:
         return say(f'archived {archive(todo, done)}')
 

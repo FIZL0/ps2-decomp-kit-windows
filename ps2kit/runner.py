@@ -134,6 +134,11 @@ def git(*a: str, cwd=None) -> sp.CompletedProcess:
     return sp.run(['git', *a], cwd=str(cwd or ROOT), capture_output=True, text=True)
 
 
+def spec_only(tid: str, cwd) -> bool:
+    """The session ended on a clean-room spec commit (`kit done <ID> … --spec`), not a finished task."""
+    return git('log', '-1', '--format=%s', cwd=cwd).stdout.startswith(f'{tid} spec:')
+
+
 def default_branch() -> str:
     """The branch worktrees start from and finished work is merged into."""
     r = git('symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD')
@@ -1010,7 +1015,8 @@ def sequential(branch: str, model: str, idle: int, pause: int, force: bool, once
             log(f'{tid}: only hit the usage limit; sleeping until {r:%H:%M}')
             time.sleep(max(0, (r - dt.datetime.now()).total_seconds()) + pause)
             continue
-        tried.add(tid)
+        if not spec_only(tid, ROOT):
+            tried.add(tid)
         if once:
             log(f'{tid}: done, and `once` was asked for')
             return 0
@@ -1109,7 +1115,10 @@ def cmd_run(argv: list[str]) -> int:
                     log(f'slot {n}: {task[0]} only hit the usage limit; transcript dropped, the task goes '
                         f'back in the pool and the slot sleeps until {reset:%H:%M}')
                 else:
-                    tried.add(task[0])  # one attempt per run: ticked, blocked or failed, a human looks next
+                    # one attempt per run: ticked, blocked or failed, a human looks next; a clean-room spec phase
+                    # (`kit done --spec`) isn't an attempt, its port phase runs once the spec is merged
+                    if not spec_only(task[0], SLOTS_DIR / f's{n}'):
+                        tried.add(task[0])
                     git('checkout', '-q', '--detach', cwd=SLOTS_DIR / f's{n}')
                     t = threading.Thread(target=finish, args=(task[0], n, sid, branch))
                     t.start()

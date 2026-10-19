@@ -165,12 +165,26 @@ def _segment(cmd: str, pos: int) -> str:
     return cmd[start:min(ends)] if ends else cmd[start:]
 
 
+def _cleanroom() -> bool:
+    """A clean-room port phase is on in this checkout: `kit plan brief` wrote `.cleanroom` (docs/WORKFLOW.md)."""
+    return (Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()) / '.cleanroom').exists()
+
+
 def decide(ev: dict) -> tuple[int, str, dict | None]:
     """(exit code, message for the agent, updated tool input) for one hook payload."""
     tool = ev.get('tool_name') or ''
     i = ev.get('tool_input') or {}
     if not isinstance(i, dict):
         return 0, '', None
+
+    # Clean-room port phase: the session ports from the task's SPEC.md and the tests, so anything that shows
+    # the decompilation (dumps, Ghidra, `kit fn/xref/dis`) is refused until `kit done` clears the marker.
+    base = _dump_paths()[1]
+    locked = rf'{re.escape(base)}/(decomp|ghidra)|\bkit\s+(fn|xref|dis|ghidra)\b|\bghidra|objdump'
+    if _cleanroom() and re.search(locked, f"{i.get('file_path', '')} {i.get('command', '')}"):
+        return 2, ('Clean-room port phase: the decompilation is locked this session. Port from the SPEC.md in '
+                   'the brief and prove it with the recordings and the oracle; anything the spec does not say goes '
+                   'under "## Open questions" in it, then `kit done <ID> "<msg>" --spec`.'), None
 
     if tool == 'Read':
         why = _is_dump(str(i.get('file_path', '')), image_ok=True)
@@ -347,6 +361,24 @@ def self_test() -> int:
     if not upd or '--pkill' not in upd.get('command', ''):
         bad += 1
         print(f'FAIL pkill -f was not rewritten: {upd}')
+    # the clean-room lock: on only while `.cleanroom` exists in the project directory
+    old = os.environ.get('CLAUDE_PROJECT_DIR')
+    os.environ['CLAUDE_PROJECT_DIR'] = tmp.name
+    (Path(tmp.name) / '.cleanroom').write_text('T1\n')
+    for ev, want in [({'tool_name': 'Bash', 'tool_input': {'command': 'kit fn 0x100000'}}, 2),
+                     ({'tool_name': 'Read', 'tool_input': {'file_path': 'context/decomp/game.c', 'limit': 9}}, 2),
+                     ({'tool_name': 'Bash', 'tool_input': {'command': 'kit check -p sim'}}, 0)]:
+        if decide(ev)[0] != want:
+            bad += 1
+            print(f'FAIL clean-room want {want}: {ev}')
+    (Path(tmp.name) / '.cleanroom').unlink()
+    if decide({'tool_name': 'Bash', 'tool_input': {'command': 'kit fn 0x100000'}})[0] != 0:
+        bad += 1
+        print('FAIL clean-room lock without .cleanroom')
+    if old is None:
+        del os.environ['CLAUDE_PROJECT_DIR']
+    else:
+        os.environ['CLAUDE_PROJECT_DIR'] = old
     tmp.cleanup()
     print('guard self-test: ' + ('ok' if not bad else f'{bad} failure(s)'))
     return 1 if bad else 0

@@ -19,7 +19,7 @@ placeholder names, because "no retail address in the port" is a rule that needs 
 one survives exactly as long as nobody is in a hurry.
 
     kit check [extra args passed to the test command]
-    kit done <ID> "<commit message>" [--blocked "<why + what unblocks it>"] [--skip-audit]
+    kit done <ID> "<commit message>" [--blocked "<why + what unblocks it>" | --spec] [--skip-audit]
     kit audit
 
 Both honour a concurrency gate and a build-directory size cap; see `_slot` and `_cap_build_dirs`.
@@ -269,6 +269,14 @@ def cmd_check(argv: list[str]) -> int:
 
 # Ghidra's placeholder names, the shapes it generates for unnamed things.
 DECOMP_NAME = re.compile(r'\b(?:FUN|DAT|SUB|LAB|UNK|OFF)_[0-9a-fA-F]{6,8}\b')
+# Ghidra's names for locals and parameters (`uVar3`, `local_28`, `param_2`, `in_stack_…`): in a port they mean
+# the decompiler's output was transcribed rather than understood.
+GHIDRA_LOCAL = re.compile(r'\b(?:(?:u|i|f|b|s|l|c|pu|pi|pf|pc|ppu|au)Var\d+|in_stack_[0-9a-f]+|local_[0-9a-f]+|'
+                          r'param_\d+|extraout_\w+|unaff_\w+|undefined[1248])\b')
+# A line of decompiled C pasted into the notes: a decompiler name on a line that ends like a statement.
+PASTED_C = re.compile(rf'(?:{DECOMP_NAME.pattern}|{GHIDRA_LOCAL.pattern}).*[;{{]\s*$')
+# What a clean-room SPEC.md must not carry: it is the only thing the port session reads (docs/WORKFLOW.md).
+SPEC_LEAK = re.compile(rf'{DECOMP_NAME.pattern}|{GHIDRA_LOCAL.pattern}|\+ ?0x[0-9a-fA-F]+|\b0x[0-9a-fA-F]{{5,8}}\b')
 # Where a port's source might plausibly live. The audit reads text, so this keeps it off binaries.
 CODE_SUFFIX = {'.rs', '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.py', '.go', '.java', '.kt', '.ts',
                '.js', '.zig', '.swift', '.lua', '.nim', '.odin', '.d', '.m', '.mm'}
@@ -293,17 +301,29 @@ def audit(root: Path, files: list[str], known: dict[int, str]) -> list[str]:
     guessing from the shape of a hex literal would flag every bitmask in the port.
 
     Addresses are looked for everywhere except the research notes and the journal, because that is
-    exactly the rule — they belong there and nowhere else. Placeholder names are looked for in source
-    files only, since prose that explains what to do about a `FUN_…` has to be able to name one."""
+    exactly the rule — they belong there and nowhere else. Placeholder names (and Ghidra's local names) are
+    looked for in source files only, since prose that explains what to do about a `FUN_…` has to be able to
+    name one. The notes get two checks of their own: no pasted lines of decompiled C, and a clean-room
+    `SPEC.md` carries no address, offset or decompiler name at all."""
     hits, addr_re = [], _address_re(list(known))
     for rel in files:
-        if rel.startswith('research/') or rel.startswith('context/'):
+        if rel.startswith('context/'):
             continue
         p = root / rel
         try:
             text = p.read_text(errors='strict')
         except (OSError, UnicodeDecodeError):
             continue                        # binary, a symlink to nowhere, gone since `git ls-files`
+        if rel.startswith(('research/', 'plan/')) and p.suffix.lower() == '.md':
+            spec = p.name == 'SPEC.md'
+            for n, line in enumerate(text.splitlines(), 1):
+                if spec and (m := SPEC_LEAK.search(line) or (addr_re and addr_re.search(line))):
+                    hits.append(f'{rel}:{n}: {m.group(0)} in a clean-room spec (behaviour only)')
+                elif PASTED_C.search(line):
+                    hits.append(f'{rel}:{n}: decompiled C in the notes (describe it instead)')
+            continue
+        if rel.startswith('research/'):
+            continue
         code = p.suffix.lower() in CODE_SUFFIX and not rel.startswith(TOOL_DIRS)
         for n, line in enumerate(text.splitlines(), 1):
             if addr_re:
@@ -313,6 +333,8 @@ def audit(root: Path, files: list[str], known: dict[int, str]) -> list[str]:
             if code:
                 for m in DECOMP_NAME.finditer(line):
                     hits.append(f'{rel}:{n}: {m.group(0)} is a decompiler placeholder name')
+                for m in GHIDRA_LOCAL.finditer(line):
+                    hits.append(f'{rel}:{n}: {m.group(0)} is a decompiler local name')
     return hits
 
 
@@ -467,6 +489,9 @@ def cmd_done(argv: list[str]) -> int:
     ap.add_argument('message', metavar='MSG', help='the commit message')
     ap.add_argument('--blocked', metavar='WHY',
                     help='mark the task [~] instead of done: why, and what would unblock it')
+    ap.add_argument('--spec', action='store_true',
+                    help="a clean-room spec phase (docs/WORKFLOW.md): audit and commit the task's SPEC.md as "
+                         '"<ID> spec: <MSG>", no tests and no tick, so the task stays open for its port phase')
     ap.add_argument('--skip-audit', action='store_true',
                     help='commit even though the address audit found something (say why in the journal)')
     a = ap.parse_args(argv)
@@ -474,8 +499,10 @@ def cmd_done(argv: list[str]) -> int:
     from ps2kit import plan  # function-local by design: plan.py is a leaf, so no import cycle
     c = cfg(False)
     cwd = Path.cwd() if (Path.cwd() / '.git').exists() else ROOT
+    if a.spec and a.blocked:
+        ap.error('--spec and --blocked are different endings: pick one')
 
-    if c.test_cmd:
+    if c.test_cmd and not a.spec:
         lock = _slot()
         try:
             _cap_build_dirs(cwd)
@@ -505,7 +532,9 @@ def cmd_done(argv: list[str]) -> int:
               f'or, if this one is deliberate, kit done {a.id} "<msg>" --skip-audit', file=sys.stderr)
         return 1
 
-    if a.blocked:
+    if a.spec:
+        a.message = f'{a.id} spec: {a.message}'
+    elif a.blocked:
         plan.block(a.id, a.blocked)
         print(f'blocked {a.id}')
     else:
@@ -523,13 +552,14 @@ def cmd_done(argv: list[str]) -> int:
         return 1
     print(subprocess.run(['git', 'log', '-1', '--oneline'], cwd=str(cwd),
                          capture_output=True, text=True).stdout.strip())
+    plan.cleanroom(False, cwd=str(cwd))  # the phase is over: the next session's brief decides again
     # Pushed here, not by hand: a branch nobody ever pushed is work that exists on one disk, and the one
     # that gets left behind is always the one whose merge went wrong.
     here = subprocess.run(['git', 'branch', '--show-current'], cwd=str(cwd),
                           capture_output=True, text=True).stdout.strip()
     if here and (line := push(cwd, here)):
         print(line)
-    if not a.blocked:
+    if not a.blocked and not a.spec:
         print(f'Journal: `kit journal state {a.id}` — an entry whose newest file is still -PART means you '
               f'left something for the next session.')
     return 0

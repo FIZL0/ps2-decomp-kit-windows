@@ -184,6 +184,15 @@ def test_brief():
         out = '\n'.join(plan.brief('D3', root=root))
         has(out, rf'first {cut} chars', 'a huge journal entry is capped, and says so')
         check(len(out) < cut + 4000, 'and the whole brief stays bounded')
+        check('phase' not in out, 'no SPEC.md: an ordinary task, no clean-room phase')
+        (j / 'SPEC.md').write_text('# D3\n\nReads the table.\n\n## Open questions\n\n- what if it is empty?\n',
+                                   encoding='utf-8')
+        has('\n'.join(plan.brief('D3', root=root)), r'## Spec phase', 'an open question: the spec phase')
+        (j / 'SPEC.md').write_text('# D3\n\nReads the table.\n\n## Open questions\n\nnone\n', encoding='utf-8')
+        out = '\n'.join(plan.brief('D3', root=root))
+        has(out, r'## Port phase', 'no open questions: the port phase')
+        has(out, r'Reads the table\.', 'with the spec pasted in')
+
 
 
 def test_shipped_backlog():
@@ -359,6 +368,21 @@ def test_audit():
         eq([h.split(':')[0] for h in bare], ['crates/sim/src/turn.rs'],
            'with nothing written down no address can be recognised, and nothing is guessed from a hex '
            'literal — only the placeholder name, whose shape is unmistakable, is still caught')
+
+        notes = {
+            'crates/sim/src/serve.rs': 'let a = uVar3 + local_28;  // transcribed, not understood\n',
+            'research/journal/2026-10-15-t1-walk/1-PART.md': '    uVar3 = FUN_0012abcd(param_1);\nthe walker eases in\n',
+            'research/journal/2026-10-15-t2-turn/SPEC.md': 'speed is read from the record at + 0x24\nturns ease in\n',
+            'research/journal/2026-10-15-t3-run/SPEC.md': 'Runs at the speed the character record gives.\n',
+        }
+        for rel, text in notes.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text, encoding='utf-8')
+        eq(sorted(h.split(':')[0] + ':' + h.split(':')[1] for h in checks.audit(root, list(notes), known)),
+           ['crates/sim/src/serve.rs:1', 'crates/sim/src/serve.rs:1',
+            'research/journal/2026-10-15-t1-walk/1-PART.md:1', 'research/journal/2026-10-15-t2-turn/SPEC.md:1'],
+           "Ghidra's local names in a port, pasted C in the notes and offsets in a clean-room spec are flagged; "
+           'prose and a clean spec are not')
 
         (root / 'crates/sim/src/near.rs').write_text('let x = 0x0035bc500;\n', encoding='utf-8')
         eq(checks.audit(root, ['crates/sim/src/near.rs'], known), [],

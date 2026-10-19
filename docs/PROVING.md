@@ -149,6 +149,16 @@ Two properties worth paying for:
 
 ---
 
+## 5. Fuzzing what strangers hand you
+
+The four above prove the port matches. They don't prove it survives bad input, and a port that reads mods,
+save files or a network peer reads files written by someone else. Fuzz every reader of those, and the
+disc readers too (a damaged image must fail, not crash or ask for 8 GB): `cargo install cargo-fuzz`, a
+`fuzz/` crate with its own `[workspace]` (copy the root's `[patch]` sections), one target per reader, and
+`cargo +nightly fuzz run <target> -- -max_total_time=300 -rss_limit_mb=4096`. A crash becomes a regular
+test next to the code. The usual finds: `Vec::with_capacity(count_from_the_file)`, `a - b` on header
+fields, slices indexed by an unchecked length, and a decompressor that keeps going past its input.
+
 ## Choosing, in practice
 
 - Is it a pure function of numbers? → **oracle**, 10k inputs, done in an hour.
