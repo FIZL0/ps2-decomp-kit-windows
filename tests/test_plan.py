@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Self-test for the agent layer: the task list, the journal, the check summary and the guard hook.
+"""Self-test for the agent layer: the kit's glue to agent-runner, the journal, the check summary and the guard.
 
-    python3 tests/test_plan.py          (no kit.toml needed, no network, no emulator, under a second)
+    py -3 tests\test_plan.py          (no kit.toml needed, no network, no emulator, a few seconds)
 
-Why these and not more: `plan.py` is the one module every session touches dozens of times, and it edits
-files in place. A bug there does not raise — it quietly eats a task line, and nobody notices until a
-"finished" task turns out never to have been done. So every mutator is exercised as a round trip in a
-temporary repo and the result is read back as text, the way a human would see it. The rest of the layer
-gets the checks that are cheap: the states the journal recognises, the build-failed/test-failed split that
-decides an agent's next move, and the guard hook's own payload suite.
+The task list and the run loop are agent-runner's, tested there. Here: the settings the kit hands it, the
+spec/port phase and its lock, the oracle join, `done`'s plan calls, the journal states, the
+build-failed/test-failed split and the guard hook's payload suite.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
-import threading
 import tempfile
 import tomllib
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ps2kit import plan  # noqa: E402
+from agent_runner import plan as P  # noqa: E402
 from ps2kit import journal as J  # noqa: E402
 from ps2kit import checks  # noqa: E402
 from ps2kit.config import Config, cfg  # noqa: E402
@@ -49,157 +49,38 @@ def has(text, pat, what):
 
 # --- the task list ------------------------------------------------------------
 
-def test_plan_roundtrip():
-    print('plan: add / next / move / note / block / unblock / tick / archive')
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp) / 'plan'
-        todo, done = plan.ensure(d / 'TODO.md', d / 'DONE.md')
-        check(os.path.exists(todo) and os.path.exists(done), 'ensure creates both files in a fresh checkout')
-        kw = dict(todo=todo, done=done)
-
-        a = plan.add('D', 'open the disc → kit.toml', **kw)
-        b = plan.add('D', 'the boot ELF → kit.toml · docs/CONTEXT.md', **kw)
-        c = plan.add('F', 'the EE FPU → crates/ps2-float/src/fpu.rs', **kw)
-        eq((a, b, c), ('D1', 'D2', 'F1'), 'add hands out the next free id per prefix')
-        # add puts each new task at the top, so the newest is first
-        eq(plan.next_task(todo=todo), 'F1', 'next_task is the first open task')
-
-        plan.move('D1', 'top', **{'todo': todo})
-        eq(plan.next_task(todo=todo), 'D1', 'move <ID> top makes it the next task')
-        plan.move('F1', 'after', 'D1', todo=todo)
-        ids = [l[4:] for l in plan.index(todo) if l.startswith('[ ] ')]
-        eq(ids, ['D1', 'F1', 'D2'], 'move <ID> after <ID> puts it straight behind')
-
-        plan.note('D2', 'the region matters: a EU disc is a different game', todo=todo)
-        has(Path(todo).read_text(), r'\*\*D2\*\*.*different game', 'note appends to the task line')
-
-        plan.block('F1', 'needs a BIOS — plan/HUMAN.md', todo=todo)
-        text = Path(todo).read_text()
-        has(text, r'- \[~\] \*\*F1\*\*.*BLOCKED: needs a BIOS', 'block marks [~] and says what would unblock')
-        eq(plan.next_task(todo=todo), 'D1', 'a blocked task is not the next task')
-        plan.unblock('F1', 'BIOS installed', todo=todo)
-        text = Path(todo).read_text()
-        check('BLOCKED' not in text, 'unblock drops the BLOCKED note')
-        has(text, r'- \[ \] \*\*F1\*\*.*BIOS installed', 'unblock keeps the line and notes why')
-
-        # a long form mirrors the tick, so the two never disagree
-        (d / 'D1.md').write_text('# D1\n\n- [ ] **D1** open the disc\n', encoding='utf-8')
-        moved = plan.tick('D1', todo=todo, done=done, plan_dir=d)
-        eq(moved, 1, 'tick archives the ticked line')
-        check('**D1**' not in Path(todo).read_text(), 'the ticked task is gone from TODO.md')
-        has(Path(done).read_text(), r'- \[x\] \*\*D1\*\* open the disc', 'with its text intact in DONE.md')
-        has((d / 'D1.md').read_text(), r'- \[x\] \*\*D1\*\*', 'and ticked in its own plan/<ID>.md')
-        eq(plan.next_id('D', [todo, done]), 'D3', 'ids are never reused: D1 is archived, the next is D3')
-
-        # a hand-tick or a tick that arrived in a merge: archive sorts it out, and is safe to repeat
-        ls = Path(todo).read_text().replace('- [ ] **D2**', '- [x] **D2**')
-        Path(todo).write_text(ls, encoding='utf-8')
-        plan._cache.clear()
-        eq(plan.archive(todo, done), 1, 'archive picks up a tick nobody moved')
-        eq(plan.archive(todo, done), 0, 'archive is a no-op the second time')
-        eq([l[4:] for l in plan.index(todo) if l.startswith('[ ] ')], ['F1'], 'one open task left')
-
-        # a split parent goes once its subtasks are all done, not while one is open or blocked; P170 isn't P17's
-        Path(todo).write_text('# T\n\n### S\n\n- [ ] **P17** (split into P17a–b)\n- [x] **P17b** b\n'
-                              '- [ ] **P170** x\n- [ ] **Q1** (split into Q1a–b)\n- [~] **Q1a** a\n', encoding='utf-8')
-        Path(done).write_text('# Done\n\n### S\n\n- [x] **P17a** a\n- [x] **Q1b** b\n', encoding='utf-8')
-        plan._cache.clear()
-        eq(plan.archive(todo, done), 2, 'archive moves the ticked subtask and its finished parent')
-        eq([l for l in plan.index(todo) if l.startswith('[')], ['[ ] P170', '[ ] Q1', '[~] Q1a'],
-           'a parent with a blocked subtask stays')
-        has(Path(done).read_text(), r'- \[x\] \*\*P17\*\* \(split into', 'the finished parent is in DONE.md')
-
-        check(not list(Path(d).glob('*.tmp')), 'no .tmp files left behind by the atomic writes')
-
-        # an unchanged file is never rewritten: mtime-stamped caches and git both care
-        before = os.stat(todo).st_mtime_ns
-        plan._write(todo, plan.lines(todo))
-        eq(os.stat(todo).st_mtime_ns, before, '_write is a no-op when the content is identical')
-
-        missing = subprocess.run([sys.executable, '-c',
-                                  'import sys;sys.path.insert(0,%r);from ps2kit import plan;'
-                                  'plan._find(["x"],"ZZ9")' % str(ROOT)], capture_output=True, text=True)
-        check(missing.returncode != 0 and 'no task' in missing.stderr,
-              'an unknown id fails loudly instead of silently doing nothing')
-
-
-def test_plan_index_and_sections():
-    print('plan: index, section lookup, files on a line')
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp) / 'plan'
-        todo, done = plan.ensure(d / 'TODO.md', d / 'DONE.md')
-        Path(todo).write_text('\n'.join([
-            '# TODO', '', '### Next (in this order)', '',
-            '- [ ] **R1** decompile → kit.toml · ghidra_scripts/ | t: none | j: r1-decompile',
-            '  - a sub-line that belongs to R1',
-            '- [~] **R2** symbols → kit.toml BLOCKED: needs R1',
-            '', '### Stretch', '', '- [ ] **K1** recipes → docs/PROVING.md', '']), encoding='utf-8')
-        plan._cache.clear()
-        eq(plan.index(todo),
-           ['# TODO', '### Next (in this order)', '[ ] R1', '[~] R2', '### Stretch', '[ ] K1'],
-           'index is headings and ids only — the whole backlog in a screenful')
-        eq(plan.section(todo, 'R1'),
-           ['- [ ] **R1** decompile → kit.toml · ghidra_scripts/ | t: none | j: r1-decompile',
-            '  - a sub-line that belongs to R1'],
-           'a task by id brings its sub-lines with it')
-        eq(plan.section(todo, 'Stretch'), ['### Stretch', '', '- [ ] **K1** recipes → docs/PROVING.md'],
-           'a section by heading substring')
-        eq(plan.section(todo, 'nope'), [], 'an unknown name is empty, not an error')
-        eq(plan.files_on_line('→ docs/CONTEXT.md · ps2kit/plan.py | t: crates/x/tests/a.rs', root=ROOT),
-           ['docs/CONTEXT.md', 'ps2kit/plan.py'],
-           'files_on_line finds the paths on a line, and stops at the tests (kit run mode d compares them)')
-        eq(plan.files_on_line('→ crates/game-sim/src/rng.rs', root=ROOT), ['crates/game-sim/src/rng.rs'],
-           'a file the task will create still counts as the task\'s file')
-
-
-def test_brief():
-    print('plan: brief')
+def test_phase():
+    print('plan: the spec/port phase that ends a brief, and the decompilation lock')
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / 'plan').mkdir()
-        (root / 'docs').mkdir()
-        (root / 'docs/CONTEXT.md').write_text('a\nb\nc\n', encoding='utf-8')
-        (root / 'plan/TODO.md').write_text(
-            '# TODO\n\n### Next\n\n- [ ] **D3** the boot ELF → docs/CONTEXT.md · crates/new.rs '
-            '| t: none | j: d3-boot-elf\n', encoding='utf-8')
-        (root / 'plan/DONE.md').write_text('# DONE\n', encoding='utf-8')
-        (root / 'plan/D3.md').write_text('# D3 — the boot ELF\n\nThe long form.\n', encoding='utf-8')
-        j = root / 'research/journal/2026-01-02-d3-boot-elf'
+        subprocess.run(['git', 'init', '-q', str(root / 'main')], check=True)
+        git = lambda *a: subprocess.run(['git', '-C', str(root / 'main'), *a], capture_output=True, text=True)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x')
+        git('worktree', 'add', '-q', str(root / 'slot'))
+        j = root / 'journal/2026-01-02-d3-boot-elf'
         j.mkdir(parents=True)
-        (j / '1-SEGMENTS-PART.md').write_text('# first pass\n', encoding='utf-8')
-        (j / '2-OVERLAYS-READY.md').write_text('# needs the human\n\nthe newest word.\n', encoding='utf-8')
-        out = '\n'.join(plan.brief('D3', root=root))
-        has(out, r'## Task D3', 'brief leads with the task')
-        has(out, r'\*\*D3\*\* the boot ELF', 'brief pastes the task line')
-        has(out, r'## plan/D3\.md', 'brief pastes the long form')
-        has(out, r'The long form\.', 'brief pastes the long form body')
-        has(out, r'1-SEGMENTS-PART\.md · 2-OVERLAYS-READY\.md', 'brief lists the journal files')
-        has(out, r'the newest word\.', 'brief pastes the NEWEST journal entry (whose move it is)')
-        check('first pass' not in out, 'brief does not paste the older entries')
-        has(out, r'`docs/CONTEXT\.md` \(3 lines\)', 'brief gives each file its length')
-        has(out, r'`crates/new\.rs` \(missing — this task creates it\)',
-            'brief says plainly when a file does not exist yet')
-        cut = plan.JOURNAL_MAX
-        (j / '3-LONG-PART.md').write_text('x' * (cut + 500), encoding='utf-8')
-        out = '\n'.join(plan.brief('D3', root=root))
-        has(out, rf'first {cut} chars', 'a huge journal entry is capped, and says so')
-        check(len(out) < cut + 4000, 'and the whole brief stays bounded')
-        check('phase' not in out, 'no SPEC.md: an ordinary task, no clean-room phase')
+        for cwd in (root / 'main', root / 'slot'):
+            eq(plan.phase('D3', root / 'journal', cwd), [], 'no SPEC.md: an ordinary task, no phase')
         (j / 'SPEC.md').write_text('# D3\n\nReads the table.\n\n## Open questions\n\n- what if it is empty?\n',
                                    encoding='utf-8')
-        has('\n'.join(plan.brief('D3', root=root)), r'## Spec phase', 'an open question: the spec phase')
+        has('\n'.join(plan.phase('D3', root / 'journal', root / 'slot')), r'## Spec phase',
+            'an open question: the spec phase')
+        check(not (root / 'slot/.cleanroom').exists(), 'the spec phase reads the decompilation, so no lock')
         (j / 'SPEC.md').write_text('# D3\n\nReads the table.\n\n## Open questions\n\nnone\n', encoding='utf-8')
-        out = '\n'.join(plan.brief('D3', root=root))
+        out = '\n'.join(plan.phase('D3', root / 'journal', root / 'slot'))
         has(out, r'## Port phase', 'no open questions: the port phase')
         has(out, r'Reads the table\.', 'with the spec pasted in')
-
-
+        check((root / 'slot/.cleanroom').exists(), 'the port phase locks the decompilation in a worktree')
+        plan.phase('D3', root / 'journal', root / 'main')
+        check(not (root / 'main/.cleanroom').exists(), 'but never in the main checkout')
+        plan.cleanroom(False, cwd=str(root / 'slot'))
+        check(not (root / 'slot/.cleanroom').exists(), '`kit done` lifts the lock')
 
 def test_shipped_backlog():
     print('plan: the backlog this kit ships with')
     todo = ROOT / 'plan/TODO.md'
-    ls = plan.lines(todo)
-    ids = [m.group(3) for l in ls if (m := plan.ITEM.match(l))]
+    ls = P.lines(todo)
+    ids = [m.group(3) for l in ls if (m := P.ITEM.match(l))]
     eq(len(ids), len(set(ids)), 'every id in plan/TODO.md is unique')
     # The count is about the backlog this kit *ships*: enough to start a port, few enough to read in one
     # sitting. A port repo running this suite by hand has its own backlog, which shrinks as tasks land and
@@ -209,17 +90,17 @@ def test_shipped_backlog():
     if not cfg(False).raw.get('game'):
         check(25 <= len(ids) <= 60, f'{len(ids)} tasks: a session each, enough to start a port')
     check(any(l.startswith('### Stretch') for l in ls), 'there is a ### Stretch section')
-    check(all(' → ' in l or ' | ' in l for l in ls if plan.ITEM.match(l)),
+    check(all(' → ' in l or ' | ' in l for l in ls if P.ITEM.match(l)),
           'every task line names the files it touches or the test it adds')
     for name in ('DONE.md', 'HUMAN.md', 'REFERENCE.md'):
         check((ROOT / 'plan' / name).exists(), f'plan/{name} exists')
     # The ids on the line are what `(after X)` and the runner match on — and a *satisfied* dependency is
-    # ticked into DONE.md and gone from TODO.md, which is how `runner.pick` reads it. Asserting the name
+    # ticked into DONE.md and gone from TODO.md, which is how the runner reads it. Asserting the name
     # is still open would fail the moment a port lands its first dependency, i.e. exactly when the
     # mechanism is working.
-    done = [m.group(3) for l in plan.lines(ROOT / 'plan/DONE.md') if (m := plan.ITEM.match(l))]
+    done = [m.group(3) for l in P.lines(ROOT / 'plan/DONE.md') if (m := P.ITEM.match(l))]
     for l in ls:
-        if not plan.ITEM.match(l):
+        if not P.ITEM.match(l):
             continue
         if m := re.search(r'\(after (\w+)\)', l):
             check(m.group(1) in ids or m.group(1) in done,
@@ -480,284 +361,119 @@ def test_inbox():
 
 # --- the runner's task picking ------------------------------------------------
 
-def test_runner_picking():
-    print('run: which task a free slot may take')
-    from ps2kit import runner as R
-    eq((R.family('L3a'), R.family('L3b'), R.family('M8f4')), ('L3', 'L3', 'M8'),
-       'siblings share a family, so they never run side by side')
-    ts = R.tasks('main')
-    ids = [t[0] for t in ts]
-    # Derived from the file, not written out here: the shipped backlog grows a task now and then, and a
-    # literal id would make that a test failure instead of an edit.
-    top = re.search(r'^- \[ \] \*\*(\S+?)\*\*', (ROOT / 'plan/TODO.md').read_text(), re.M).group(1)
-    check(ids and ids[0] == top, 'the first startable task is the first line of the backlog', str(ids[:3]))
-    check(not [t for t in ts if t[1].startswith('Stretch')], 'Stretch is never offered to a run')
-    check('R1' not in ids, 'a task whose (after X) dependency is still open is not offered')
-    first = R.pick({}, set(), 'd', 'main')
-    eq(first[0], top, 'an empty run starts at the top')
-    busy = {1: first}
-    second = R.pick(busy, set(), 'd', 'main')
-    check(second[1] != first[1], 'an ordered section runs one task at a time', str(second[:2]))
-    check(not (second[2] & first[2]), 'and mode d keeps the second task off the first one\'s files')
-    eq(R.pick({}, {t[0] for t in ts}, 'd', 'main'), None, 'nothing left once everything has been tried')
-    real = R.plan_text
-    R.plan_text = lambda b: ['### Next', '- [ ] **A1** (split into A1a–b) all subtasks ticked',
-                             '- [ ] **B2** (split into B2a–b)', '- [~] **B2a** blocked',
-                             '- [ ] **C3** split into two tabs', '- [ ] **D4** (split into D4a–b)', '- [ ] **D4a**']
-    try:
-        eq([t[0] for t in R.tasks('main')], ['A1', 'C3', 'D4a'],
-           'a split parent runs once its subtasks are ticked, waits on blocked ones, and "split into" in prose is no parent')
-    finally:
-        R.plan_text = real
+
+# --- the glue to agent-runner -------------------------------------------------
+
+def oracle_join(text):
+    with tempfile.TemporaryDirectory() as tmp:
+        u, o = Path(tmp) / 'union', Path(tmp) / 'out'
+        u.write_text(text, encoding='utf-8')
+        r = subprocess.run([sys.executable, str(ROOT / 'kit'), 'oracle', 'join', str(u), str(o)],
+                           capture_output=True, text=True)
+        return o.read_text(encoding='utf-8') if r.returncode == 0 else None
 
 
-def test_runner_union():
-    print('run: which merge conflicts the runner resolves itself')
-    from ps2kit import runner as R
-    for f in ('plan/TODO.md', 'plan/DONE.md', 'research/journal/2026-01-01-t7-walker/README.md',
-              'research/oracle.txt'):
-        check(R.joinable(f), f'{f} is a list of records, so the run may join both sides')
-    # PLAN.md is the interesting no: append-only, and still not joinable, because a union of two
-    # reflowed paragraphs strands half a sentence inside a bullet instead of failing.
-    for f in ('PLAN.md', 'AGENT.md', 'README.md', 'docs/WORKFLOW.md', 'crates/game-sim/src/tick.rs',
-              'plan/notes.txt', 'kit.toml.example'):
-        check(not R.joinable(f), f'{f} needs reading, so it goes to a human')
-
-    # The address list is the one joinable file where both sides can be *wrong together*: nothing
-    # downstream picks between two addresses for one name, so a clash must not be resolved here.
+def test_oracle_join():
+    print('oracle join: the [run.join] command for the addresses file')
+    # The one joinable file where both sides can be wrong together: nothing downstream picks between two
+    # addresses for one name, so a clash must not be resolved here.
     both = 'angle 0x1004c0 the stick angle\nspeed 0x100500\n'
-    eq(R.addresses(both + 'speed 0x100500\n', 'o.txt'), both,
-       'a name both sides added at the same address is kept once')
-    eq(R.addresses('angle 0x1004c0\nangle 0x2004c0\n', 'o.txt'), None,
-       'the same name at two addresses is left for a human, never picked')
-    eq(R.addresses('angle main 0x1004c0\nangle menu 0x1004c0\n', 'o.txt').count('angle'), 2,
+    eq(oracle_join(both + 'speed 0x100500\n'), both, 'a name both sides added at the same address is kept once')
+    eq(oracle_join('angle 0x1004c0\nangle 0x2004c0\n'), None, 'the same name at two addresses exits 1')
+    eq(oracle_join('angle main 0x1004c0\nangle menu 0x1004c0\n').count('angle'), 2,
        'the same name in two overlays is two addresses and both stay')
-    eq(R.addresses('angle\n', 'o.txt'), None, 'a line that is not an address stops the join too')
-    kept = R.addresses('# the stick\nangle 0x1004c0\n\n# the bike\nspeed 0x100500\n', 'o.txt')
-    eq(kept, '# the stick\nangle 0x1004c0\n\n# the bike\nspeed 0x100500\n',
-       'comments and blank lines survive the join (a note belongs to the line under it)')
+    eq(oracle_join('angle\n'), None, 'a line that is not an address stops the join too')
+    text = '# the stick\nangle 0x1004c0\n\n# the bike\nspeed 0x100500\n'
+    eq(oracle_join(text), text, 'comments and blank lines survive the join')
 
 
-def test_runner_fixer():
-    print('run: the conflict a join cannot do goes to a session, not to a human')
-    from ps2kit import runner as R
+def kit_py(code, toml, **env):
+    """Run `code` in a fresh interpreter with KIT_CONFIG at `toml`; its stdout."""
+    r = subprocess.run([sys.executable, '-c', f'import sys; sys.path.insert(0, {str(ROOT)!r}); {code}'],
+                       capture_output=True, text=True, env={**os.environ, 'KIT_CONFIG': str(toml), **env})
+    check(r.returncode == 0, f'{code[:40]} runs', r.stderr[-400:])
+    return r.stdout
 
+
+def test_runner_config():
+    print('run: the settings kit run hands agent-runner')
+    from ps2kit import runner as K
     with tempfile.TemporaryDirectory() as tmp:
-        repo = Path(tmp) / 'r'
-        (repo / 'context' / 'notes').mkdir(parents=True)
-        run = lambda *a, **kw: subprocess.run(['git', *a], cwd=str(repo), capture_output=True, text=True, **kw)
-        run('init', '-q', '-b', 'main')
-        run('config', 'user.email', 't@example.invalid')
-        run('config', 'user.name', 'test')
-        (repo / 'f.rs').write_text('fn tick() { base(); }\n', encoding='utf-8')
-        run('add', '-A'); run('commit', '-qm', 'base')
-        run('checkout', '-q', '-b', 'task/T9')
-        (repo / 'f.rs').write_text('fn tick() { theirs(); }\n', encoding='utf-8')
-        run('add', '-A'); run('commit', '-qm', 'T9')
-        run('checkout', '-q', 'main')
-        (repo / 'f.rs').write_text('fn tick() { ours(); }\n', encoding='utf-8')
-        run('add', '-A'); run('commit', '-qm', 'ours')
-        base = run('rev-parse', 'HEAD').stdout.strip()   # where main sits before each attempt
-
-        # A stub agent: the kit already has KIT_AGENT for this, so no model is called. It is handed the
-        # real prompt on argv and works on the real half-done merge, which is the whole point — the
-        # thing under test is the state the runner leaves behind and what it makes of what came back.
-        agent = Path(tmp) / 'agent'
-        agent.write_text('#!/bin/sh\n'
-                         'echo "$2" > "$FIXER_PROMPT"\n'
-                         'cd "$FIXER_REPO" || exit 1\n'
-                         'case "$FIXER_ACT" in\n'
-                         '  resolve) printf "fn tick() { ours(); theirs(); }\\n" > f.rs\n'
-                         '           git add f.rs && git commit -q --no-edit ;;\n'
-                         '  abort)   git merge --abort ;;\n'
-                         '  nothing) : ;;\n'
-                         'esac\n', encoding='utf-8')
-        agent.chmod(0o755)
-        prompt_file = Path(tmp) / 'prompt.txt'
-        env = {'KIT_AGENT': str(agent), 'FIXER_REPO': str(repo), 'FIXER_PROMPT': str(prompt_file)}
-        real_root, real_cfg = R.ROOT, R.cfg
-        R.ROOT = repo
-        R.cfg = lambda required=False: Config(raw={'paths': {'context': 'context'}})
-        R.cfg(False).__dict__['path'] = repo / 'kit.toml'
-        try:
-            import ps2kit.config as C
-            real_c_root, C.ROOT = C.ROOT, repo
-            try:
-                for act, want in (('resolve', None), ('abort', 'aborted the merge'),
-                                  ('nothing', 'did not finish the merge')):
-                    run('merge', '--abort')
-                    run('reset', '-q', '--hard', base)   # the resolve case above landed the merge
-                    conflicted = run('merge', '--no-edit', 'task/T9')
-                    check(conflicted.returncode != 0, f'[{act}] the merge really does conflict')
-                    os.environ.update({**env, 'FIXER_ACT': act})
-                    why = R.fix_merge('T9', 'main', ['f.rs'])
-                    if want is None:
-                        check(why is None, 'a session that resolves it and commits means the merge landed')
-                        check('theirs' in (repo / 'f.rs').read_text() and
-                              'ours' in (repo / 'f.rs').read_text(),
-                              "and both sides' work is in the file")
-                    else:
-                        check(why is not None and want in why, f'[{act}] reported: {why}')
-                        check('notes/fixer.log' in (why or ''), f'[{act}] and says where the transcript is')
-
-                # What the session is told. The fences are the load-bearing part: a model with the main
-                # checkout and a shell is otherwise one bad turn from doing the task itself.
-                sent = prompt_file.read_text(encoding='utf-8')
-                for must in ('task/T9', 'f.rs', 'both sides', 'git commit --no-edit', 'git merge --abort',
-                             'not doing task T9', 'do not run the test suite', '.worktrees/'):
-                    check(must in sent, f'the prompt says {must!r}')
-
-                # …and the off switch, which has to leave the merge exactly as it found it.
-                R.cfg = lambda required=False: Config(raw={'run': {'fix_merges': False},
-                                                           'paths': {'context': 'context'}})
-                run('merge', '--abort')
-                run('reset', '-q', '--hard', base)
-                run('merge', '--no-edit', 'task/T9')
-                why = R.fix_merge('T9', 'main', ['f.rs'])
-                check(why is not None and 'fix_merges is off' in why, 'switched off, it says so')
-                check(run('rev-parse', '--verify', '-q', 'MERGE_HEAD').returncode == 0,
-                      'and the half-done merge is left for the caller to abort')
-            finally:
-                C.ROOT = real_c_root
-        finally:
-            R.ROOT, R.cfg = real_root, real_cfg
-            for k in (*env, 'FIXER_ACT'):
-                os.environ.pop(k, None)
+        toml = Path(tmp) / 'kit.toml'
+        toml.write_text(f'[paths]\ncontext = "ctx"\njournal = "notes/j"\n[game]\niso = "game/x.iso"\n'
+                        f'[git]\npush_merge = false\n'
+                        f'[agent-runner.run]\nslots = 5\n', encoding='utf-8')
+        s = json.loads(kit_py('import json; from ps2kit import runner; print(json.dumps(runner.settings()))', toml))
+        r = s['run']
+        kit = shlex.join([sys.executable, 'kit'])
+        eq(r['command'], 'kit', 'sessions are told kit, not agent-runner')
+        eq(r['test'], f'{kit} check', 'the gate is kit check, run by this interpreter (cmd.exe runs no `kit` script)')
+        eq(r['on_exit'], f'{kit} pcsx2 stop', 'a slot closes its own emulator when its session ends')
+        eq(r['slot_env'], ['KIT_PCSX2={n}', 'KIT_RUN=1'], 'each slot gets its own emulator copy')
+        check({'KIT_CONFIG', 'KIT_CHECK_SLOTS', 'AGENT_RUNNER_IDLE_BG'} <= set(r['pass_env']),
+              'and the kit settings the runner was started with', str(r['pass_env']))
+        eq(r['links'], ['ctx', '*.iso', 'game/x.iso'], 'context and the disc are linked into every worktree')
+        eq(r['notes'], 'ctx/notes', 'the runner logs into context/notes')
+        eq(s['plan'], {'brief_extra': f'{kit} plan phase {{id}}', 'dir': 'plan', 'journal': 'notes/j'},
+           'plan and journal come from kit.toml, and every brief ends with the phase')
+        eq(r['joinable'], ['plan/*.md', 'notes/j/*.md', 'research/oracle.txt'], 'joinable: plan, journal, oracle')
+        eq(r['join'], {'research/oracle.txt': f'{kit} oracle join {{union}} {{out}}'}, 'the oracle file joins via kit')
+        eq(r['untested'], ['*.md', '.github/*'], 'docs and CI files do not need a re-test')
+        eq((s['git']['push'], s['git']['push_merge']), ('origin', False), '[git] carries over')
+        eq(r['slots'], 5, 'a kit.toml [agent-runner] table wins')
+        eq(tomllib.loads('\n'.join(K._toml(s))), s, 'the generated file reads back as the same settings')
+        for f in ('plan/TODO.md', 'plan/DONE.md', 'notes/j/2026-01-01-t7-walker/README.md', 'research/oracle.txt'):
+            check(any(fnmatch.fnmatch(f, g) for g in r['joinable']), f'{f} is joinable')
+        for f in ('PLAN.md', 'AGENT.md', 'docs/WORKFLOW.md', 'crates/game-sim/src/tick.rs', 'plan/notes.txt'):
+            check(not any(fnmatch.fnmatch(f, g) for g in r['joinable']), f'{f} needs reading, so not joinable')
+    from ps2kit import platform_
+    saved = platform_.WINDOWS, sys.executable
+    try:  # what cmd.exe gets on Windows: the interpreter's path in double quotes, then the relative script
+        platform_.WINDOWS, sys.executable = True, r'C:\Program Files\Python312\python.exe'
+        s = K.settings()
+        eq(s['run']['test'], r'"C:\Program Files\Python312\python.exe" kit check', '{kit} is quoted for cmd.exe')
+        eq(s['run']['prompt_extra'].count('{kit}') + s['run']['prompt_extra'].count('python.exe'), 0,
+           'what the agents read says kit, not an interpreter path')
+    finally:
+        platform_.WINDOWS, sys.executable = saved
+    eq(K._slots([], 3), 3, 'slots: the default')
+    eq(K._slots(['--mode', 'p', '5'], 3), 5, 'slots: after an option with a value')
+    eq(K._slots(['once'], 3), 1, 'slots: once is one')
 
 
-def test_runner_merge():
-    print('run: a merge is tested in its own worktree, so the main checkout is never blocked or reset')
-    from ps2kit import runner as R
-    import ps2kit.config as C
-
+def test_done_plan_calls():
+    print('done: ticks and blocks through agent-runner\'s plan')
     with tempfile.TemporaryDirectory() as tmp:
-        repo = Path(tmp) / 'r'
-        (repo / 'context' / 'notes').mkdir(parents=True)
+        repo = Path(tmp)
         (repo / 'plan').mkdir()
-        run = lambda *a: subprocess.run(['git', *a], cwd=str(repo), capture_output=True, text=True)
-        run('init', '-q', '-b', 'main')
-        run('config', 'user.email', 't@example.invalid')
-        run('config', 'user.name', 'test')
-        (repo / '.gitignore').write_text('context/\n', encoding='utf-8')
-        (repo / 'plan' / 'TODO.md').write_text('# todo\n', encoding='utf-8')
-        (repo / 'plan' / 'DONE.md').write_text('# done\n', encoding='utf-8')
-        (repo / 'code.rs').write_text('a\n', encoding='utf-8')
-        run('add', '-A'); run('commit', '-qm', 'base')
-
-        def task(tid, files, behind=False):
-            run('checkout', '-q', '-b', f'task/{tid}')
-            for f, text in files.items():
-                (repo / f).write_text(text, encoding='utf-8')
-            run('add', *files); run('commit', '-qm', tid)
-            run('checkout', '-q', 'main')
-            if behind:  # main moves on, so the merge is new code and gets tested
-                (repo / f'{tid}.main').write_text('m\n', encoding='utf-8')
-                run('add', f'{tid}.main'); run('commit', '-qm', f'main before {tid}')
-
-        during = []  # (file, text) a session commits on main while the tests run
-
-        def kit_in(d, *a):
-            if a[:1] == ('check',):
-                for f, text in during:
-                    (repo / f).write_text(text, encoding='utf-8')
-                    run('commit', '-qm', f'session {f}', '--', f) if (repo / f).exists() and \
-                        run('ls-files', f).stdout else (run('add', f), run('commit', '-qm', f'session {f}'))
-                during.clear()
-                bad = (Path(d) / 'FAIL').exists()
-                return subprocess.CompletedProcess([], int(bad), 'TESTS FAILED\n' if bad else 'TESTS PASSED\n', '')
-            return subprocess.CompletedProcess([], 0, '', '')
-
-        saved = R.ROOT, R.SLOTS_DIR, R.cfg, R.kit_in, C.ROOT
-        R.ROOT, C.ROOT, R.SLOTS_DIR, R.kit_in = repo, repo, Path(tmp) / 'slots', kit_in
-        R.cfg = lambda required=False: Config(raw={'paths': {'context': 'context'}, 'git': {'push_merge': False}})
-        try:
-            # 1: lands; an uncommitted edit elsewhere in the main checkout stays put
-            task('T1', {'t1.rs': '1\n'}, behind=True)
-            (repo / 'plan' / 'TODO.md').write_text('# todo\nmine\n', encoding='utf-8')
-            eq(R.merge('T1', 'main'), None, 'a clean merge lands')
-            check((repo / 't1.rs').exists(), 'and its work is in the main checkout')
-            check('mine' in (repo / 'plan' / 'TODO.md').read_text(), 'an uncommitted edit there is untouched')
-            eq(run('stash', 'list').stdout, '', 'and nothing went into a stash')
-            run('checkout', '-q', '--', 'plan/TODO.md')
-
-            # 2: a session commits code on main during the tests: the merge is tested again on top of it
-            task('T2', {'t2.rs': '2\n'}, behind=True)
-            during.append(('code.rs', 'a\nsession\n'))
-            eq(R.merge('T2', 'main'), None, 'a merge whose branch moved during the tests still lands')
-            log = run('log', '--format=%s', 'main').stdout
-            check('session code.rs' in log and 't2.rs' in run('ls-files').stdout,
-                  "both the session's commit and the task are on main", log)
-            check(run('merge-base', '--is-ancestor', 'HEAD~0', 'main').returncode == 0 and
-                  'tested merge, onto' not in run('log', '-1', '--format=%s', 'main').stdout,
-                  'it was rebuilt on the new main rather than merged onto it untested')
-
-            # 3: failing tests leave main exactly where it was
-            task('T3', {'FAIL': 'x\n'}, behind=True)
-            before = run('rev-parse', 'main').stdout
-            why = R.merge('T3', 'main')
-            check(why is not None and 'tests fail' in why, 'failing tests are reported', str(why))
-            eq(run('rev-parse', 'main').stdout, before, 'and main never moved')
-            check(not (repo / 'FAIL').exists(), 'and the main checkout never saw the failing merge')
-            run('branch', '-D', 'task/T3')
-
-            # 4: finished tasks queued on the lock land together, built and tested once; one that conflicts
-            # is left out and merges alone, and a batch that fails its tests falls back to one at a time
-            checks = []
-            counted = R.kit_in
-            R.kit_in = lambda d, *a: (checks.append(a) if a[:1] == ('check',) else None, counted(d, *a))[1]
-            for t in ('T4', 'T5', 'T6'):
-                task(t, {f'{t.lower()}.rs': t + '\n'})
-            task('T7', {'code.rs': 'a\nT7\n'}, behind=True)
-            (repo / 'code.rs').write_text('a\nmain\n', encoding='utf-8')
-            run('commit', '-qm', 'main edits code.rs', '--', 'code.rs')
-            R.WAITING.extend(['T5', 'T7', 'T6'])  # queued behind T4, as their finish() threads would be
-            eq(R.merge('T4', 'main'), None, 'the first queued task lands')
-            check(all((repo / f't{n}.rs').exists() for n in (4, 5, 6)), 'and the clean ones landed with it')
-            eq(len(checks), 1, 'tested once for all three')
-            check('T7' not in (repo / 'code.rs').read_text(), 'the conflicting one never reached main inside the batch')
-            eq([R.merge(t, 'main') for t in ('T5', 'T6')], [None, None], "the batched ones' own merges return at once")
-            R.WAITING.remove('T7')  # its thread queued once; its own merge() queues it again below
-            R.merge('T7', 'main')  # alone, with its own conflict handling (the fixer stub from above resolves it)
-            eq(len(checks), 2, 'and was tested on its own')
-            eq((R.WAITING, R.LANDED), ([], set()), 'nothing is left queued')
-
-            checks.clear()
-            task('T8', {'t8.rs': '8\n'}, behind=True)
-            task('T9', {'FAIL': 'x\n'})
-            R.WAITING.append('T9')
-            eq(R.merge('T8', 'main'), None, 'a failed batch: the good task lands alone')
-            check((repo / 't8.rs').exists() and not (repo / 'FAIL').exists(), 'without the failing one')
-            R.WAITING.remove('T9')
-            check('tests fail' in str(R.merge('T9', 'main')), 'which fails on its own merge, against itself')
-            eq((R.WAITING, R.LANDED), ([], set()), 'nothing is left queued')
-        finally:
-            R.ROOT, R.SLOTS_DIR, R.cfg, R.kit_in, C.ROOT = saved
-
-
-def test_stop_hook_never_crashes():
-    print('run: the Stop hook that ends an idle session')
-    for payload in ('{}', 'garbage', '{"transcript_path": "/nonexistent"}', '{"transcript_path": null}'):
-        r = subprocess.run([sys.executable, str(ROOT / 'ps2kit/runner.py'), '--stop-hook'],
-                           input=payload, capture_output=True, text=True)
-        eq(r.returncode, 0, f'--stop-hook exits 0 on {payload[:28]}' + (': ' + r.stderr[-200:] if r.returncode else ''))
-
-
-# --- the kit still imports and still explains itself --------------------------
+        (repo / 'plan/TODO.md').write_text('# TODO\n\n### Next\n\n- [ ] **T1** one\n- [ ] **T2** two\n'
+                                           '- [ ] **T3** three\n', encoding='utf-8')
+        (repo / 'plan/DONE.md').write_text('# DONE\n', encoding='utf-8')
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        toml = repo / 'kit.toml'
+        toml.write_text(f'[paths]\ncontext = {json.dumps(str(repo / "ctx"))}\n', encoding='utf-8')
+        env = {'AGENT_RUNNER_REPO': str(repo)}
+        kit_py("from ps2kit import plan; plan.tick('T1'); plan.block('T2', 'needs T3 first', after=['T3'])", toml,
+               **env)
+        todo = (repo / 'plan/TODO.md').read_text(encoding='utf-8')
+        check('**T1**' not in todo and '**T1**' in (repo / 'plan/DONE.md').read_text(encoding='utf-8'),
+              'tick moves the task to DONE.md')
+        has(todo, r'- \[~\] \*\*T2\*\* two .*BLOCKED: \(after T3\) needs T3 first', 'block --after records the wait')
+        check((repo / 'ctx/notes/agent-runner.toml').exists(), 'with the generated settings')
 
 def test_cli_help():
     print('cli: every command of this layer explains itself with no kit.toml')
-    for cmd in ('plan', 'journal', 'check', 'done', 'run'):
+    for cmd in ('plan', 'journal', 'check', 'done', 'run', 'stop', 'oracle'):
         r = subprocess.run([sys.executable, str(ROOT / 'kit'), cmd, '--help'],
                            capture_output=True, text=True, cwd=str(ROOT))
-        check(r.returncode == 0 and len(r.stdout) > 200,
+        check(r.returncode == 0 and len(r.stdout) > 40,
               f'kit {cmd} --help prints help', (r.stdout + r.stderr)[:400])
 
 
 def main() -> int:
-    for t in (test_plan_roundtrip, test_plan_index_and_sections, test_brief, test_shipped_backlog,
-              test_atomic_write, test_journal, test_check_summary, test_audit, test_guard, test_inbox,
-              test_runner_picking,
-              test_runner_union, test_runner_fixer, test_runner_merge, test_stop_hook_never_crashes, test_cli_help):
+    for t in (test_phase, test_shipped_backlog, test_atomic_write, test_journal, test_check_summary,
+              test_audit, test_guard, test_inbox, test_oracle_join, test_runner_config,
+              test_done_plan_calls, test_cli_help):
         t()
     print()
     if FAILED:

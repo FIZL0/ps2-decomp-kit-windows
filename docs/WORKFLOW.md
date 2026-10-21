@@ -183,51 +183,45 @@ sitting with fresh context, and that is deliberate.
 
 ```powershell
 kit run once                 # one task, then stop
-kit run 3                    # three at a time, each in its own git worktree
-kit run 3 --mode d           # ... picking tasks that touch different files
+kit run 3                    # three at a time, each in its own git worktree (mode d: different files)
+kit run 3 --mode p           # ... strictly in TODO.md order, files may overlap
+kit run --dry-run 3          # what would start now, and why the rest wait
+kit stop                     # running tasks finish and merge, nothing new starts
 ```
 
-What to expect from a long run:
+The loop is [agent-runner](https://github.com/FIZL0/agent-runner) (install: SETUP.md step 1); its README
+covers picking, merging and the idle Stop hook. The kit's settings for it are in `ps2kit/runner.toml`; a
+`[agent-runner]` table in `kit.toml` overrides them. What to expect:
 
-- It needs `git worktree`, and a terminal per agent. With Windows Terminal it opens one tab per slot in
-  a single window named `kit`, which is what you want for watching a run; without `wt.exe` each slot
-  gets its own console window, and it says so. A slot count of 1, `kit run once` and `--no-tmux` all
-  take the sequential path instead: one session at a time, in this checkout, on the current branch — a
-  working run, just a slower one.
-- Each agent works on `task/<ID>` in its own worktree, with its own build directory, so three can run
-  tests at once. Merge them afterwards; conflicts are rare if tasks were picked for different files.
-- The conflicts that do happen are mostly two agents appending to the same list, so the run joins those
-  itself and says which files it joined: the task list and its archive, the journal, and the oracle's
-  address list — files where a line is a whole record and both sides' records belong. Anything else it
-  hands to a session of its own (the bullet below), with the branch and the target untouched until that
-  session has finished the merge.
-  Prose is on the "hands over" side on purpose, including `PLAN.md`'s code map: joining two reflowed
-  paragraphs line by line produces something that reads like a sentence and is not one. So is the
-  address list when the two sides give one name different addresses — the whole point of joining is
-  that both sides belong, and there exactly one of them is wrong.
-
-- A conflict the runner cannot join mechanically does not come to you: it gets a Claude session of its
-  own, in the main checkout, which reads both sides and finishes the merge. The runner then runs the
-  tests and pushes as usual. A session that cannot resolve it honestly aborts the merge and says why,
-  and *that* is what lands in your lap — with the transcript in `context/notes/fixer.log` and one line
-  per merge in `context/notes/master.md`. `[run] fix_merges = false` turns it off.
-- Every merge that passes the tests is pushed, and the merged `task/<ID>` is dropped from the remote, so
-  `git ls-remote --heads origin` is the list of branches whose merge did not land. `[git] push_merge =
-  false` keeps the merge local until you have read it, and logs the `git push` to run.
-- Expect roughly one blocked task in five. Blocked is a result, not a failure — the reason is recorded
-  and the next session can pick it up.
-- Build directories grow fast. A Rust workspace per worktree can reach tens of gigabytes; `kit check`
-  cleans the oldest when the total passes its cap, and the cap is in `kit.toml`.
-- Afterwards: `kit plan` to see what moved, `git log --oneline` per branch, then merge. Read the
-  journal entries before the diffs — they tell you which commits to trust.
-- Closing the Windows Terminal window kills the tabs in it, and with them any session mid-commit. Let a
-  run finish, or stop a single slot's session in its own tab.
+- It runs until stopped (only `once` exits by itself). With nothing to start it logs `run idle` and keeps
+  re-reading `plan/TODO.md` on the shared branch. A script waiting on a run watches the log
+  (`context/notes/run.log`) for `run idle`, not for the process to exit. `kit stop` from another terminal
+  stops it gently; Ctrl-C stops it at once.
+- It needs `git worktree` and a terminal per agent. With Windows Terminal it opens one tab per slot in a
+  window named `agents`; without `wt.exe` each slot gets its own console window, and it says so. A slot
+  count of 1, `kit run once` and `--no-tmux` take the sequential path: one session at a time, in this
+  checkout.
+- Each agent works on `task/<ID>` in its own worktree and build directory, with its own emulator copy
+  (`KIT_PCSX2=N`), closed when the session ends. The runner merges each finished branch, runs `kit check`
+  on the merge and pushes it.
+- Conflicts in files where a line is a whole record (the task list, the journal, the oracle's address
+  list) are joined mechanically; the address list refuses a name given two different addresses. Any other
+  conflict goes to an agent session in the main checkout (transcript in `context/notes/fixer.log`); one it
+  cannot resolve is left for you, with the reason in `context/notes/ledger.md`. `[run] fix_merges = false`
+  turns the sessions off.
+- Blocked is a result, not a failure: the reason is recorded and the next session can pick it up. A block
+  with `--after X` reopens when X lands.
+- Build directories grow fast. `kit check` cleans the oldest when the total passes the cap in `kit.toml`.
+- Afterwards: `kit plan` to see what moved, and read the journal entries before the diffs.
+- The merged `task/<ID>` is dropped from the remote, so `git ls-remote --heads origin` lists the branches
+  whose merge did not land. `[git] push_merge = false` keeps merges local until you have read them.
+- Closing the Windows Terminal window kills the tabs in it, and with them any session mid-commit. Use
+  `kit stop` instead.
 
 If you run more than one emulator copy, each agent needs its own: `$env:KIT_PCSX2 = 2` gives it its own
 config directory (PCSX2 launched with `-cfgpath`), its own PINE port, its own pad and its own lock, so
 two agents cannot drive the same window. `kit run` sets it per slot; set it per tab if you are driving
-copies by hand, never in your PowerShell profile — a variable left set there is how you later record the
-wrong emulator.
+copies by hand, never in your PowerShell profile.
 
 ---
 

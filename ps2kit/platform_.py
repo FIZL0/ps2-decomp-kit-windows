@@ -1,8 +1,8 @@
 """Everything the kit does that is about the *operating system*, in one place — the Windows edition.
 
 The rest of the kit is OS-neutral and goes through these functions. That is the whole point: this module
-(plus `pad.py`'s backend and transport, the OS-bound bits of `emu.py` and `runner.py`, and the shell
-wrappers) is the only place that differs from the Linux edition, and nothing else has to know.
+(plus `pad.py`'s backend and transport, the OS-bound bits of `emu.py`, and the shell wrappers; the
+unattended run's are agent-runner's own) is the only place that differs from the Linux edition, and nothing else has to know.
 
 What belongs here: where runtime files live, how a lock is taken, how a PCSX2 config dir is found and how a
 copy of it is launched, how a window is screenshotted, how a process is found, checked and stopped, how PINE

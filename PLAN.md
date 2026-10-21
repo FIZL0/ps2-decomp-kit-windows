@@ -89,13 +89,11 @@ rebased, because the run's worktree branches are based on those commits. A push 
 line and nothing more. `[git] push = false` turns it all off; `[git] push_merge = false` keeps the task
 branches going out but leaves the merge local until a person has read it.
 
-**A conflict the runner cannot join goes to a Claude session, not to you.** `joinable()` decides what can
-be joined mechanically — files where a line is a whole record: the task list, the journal, the oracle's
-address list. Anything else needs reading, so the runner starts one session per such merge, in the main
-checkout, with the conflict and the tail of `context/notes/master.md` in its prompt; it resolves, commits
-and stops, and the runner tests and pushes as usual. One session per merge rather than one long-lived
-one, so merge twenty costs what merge one did. `[run] fix_merges = false` goes back to leaving them for
-a human.
+**A conflict the runner cannot join goes to an agent session, not to you.** Files where a line is a whole
+record (the task list, the journal, the oracle's address list) are joined mechanically; a name given two
+addresses in the address list is refused (`kit oracle join`). Anything else gets one session per merge
+in the main checkout, which resolves and commits; the runner then tests and pushes as usual.
+`[run] fix_merges = false` leaves them for a human.
 
 ## Code map
 
@@ -115,7 +113,8 @@ Keep this current. It exists so nobody greps the repo to find where something li
   `decomp.py` read the dumps one function at a time
 - live: `pine.py` PCSX2 memory · `pad.py` virtual controller · `emu.py` launch/stop/screenshot/states ·
   `probe.py` find addresses · `record.py` declarative captures
-- workflow: `plan.py` · `journal.py` · `checks.py` · `runner.py` unattended runs · `oracle.py` ·
+- workflow: `plan.py` · `journal.py` · `checks.py` · `runner.py` + `runner.toml` the kit's settings for
+  [agent-runner](https://github.com/FIZL0/agent-runner), which runs `kit plan` and `kit run` · `oracle.py` ·
   `setup.py` setup and doctor · `hooks/` the context guards
 
 `watch/` — capture specs (`*.toml`), one per thing you record. `research/` — your own scripts and notes,
@@ -143,14 +142,16 @@ project.
 ```powershell
 kit run once                  # one task, then stop
 kit run 3                     # three agents at a time, each in its own worktree
-kit run 3 --mode d            # ... picking tasks that touch different files
+kit run 3 --mode p            # ... strictly in TODO.md order (mode d, the default, keeps them off each other's files)
+kit run --dry-run 3           # what would start, and why the rest wait
+kit stop                      # running tasks finish and merge, nothing new starts
 ```
 
-Each agent gets a git worktree on a `task/<ID>` branch, so three can build and test without fighting over
-one target directory. Tasks are picked to avoid working on the same files.
+The loop is [agent-runner](https://github.com/FIZL0/agent-runner) (install: SETUP.md step 1). Each agent
+gets a git worktree on a `task/<ID>` branch and its own emulator copy (`KIT_PCSX2=N`).
 
 Each agent also needs a terminal. With Windows Terminal installed, `kit run` opens one `wt.exe` tab per
-agent in a single window; without it, one console window per agent. `kit run once`, one slot and
+agent in a window named `agents`; without it, one console window per agent. `kit run once`, one slot and
 `--no-tmux` all mean the sequential path: one session at a time in this checkout. Don't close the window
 on a run — a session killed mid-commit leaves a task neither ticked nor blocked. See `docs/WORKFLOW.md`
 for what to expect from a long run and how to pick up the pieces afterwards.

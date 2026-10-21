@@ -224,10 +224,10 @@ three and got one, it also prints why: no multiplexer at all, meaning neither Wi
 the Linux edition) tmux.
 
 **A tab opened and closed immediately, and the slot shows no pid**
-`wt.exe` is a client: it asks the running terminal to open a tab and exits, so the agent is started by
-the terminal's environment rather than the kit's. A tab that dies at once is usually a `kit` that is not
+`wt.exe` is a client: it asks the running terminal to open a tab and exits, so the tab gets the
+terminal's environment rather than the run's. A tab that dies at once is usually a `claude` that is not
 on `PATH` for that environment, or a `PATH` set only in the shell you launched from. Check with
-`wt.exe -w kit new-tab --title test cmd /k kit doctor` and read what the tab says before it closes.
+`wt.exe -w agents new-tab --title test cmd /k claude --version` and read what the tab says.
 
 **An agent stopped early with tasks remaining**
 Read its journal entry and `kit plan` — a blocked task is a result, with its reason recorded. If it

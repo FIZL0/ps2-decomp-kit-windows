@@ -124,8 +124,17 @@ $env:PATH += ";$PWD"                                      # this shell only
 If PowerShell refuses to run `kit.ps1` at all, that is the execution policy, not the kit:
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `kit.cmd`, which has no policy to satisfy.
 
-Nothing to install beyond that. Everything static — reading the disc, the ELFs, the decompilation, the
-task list — runs on a stock Python with no packages at all.
+Reading the disc, the ELFs and the decompilation runs on a stock Python with no packages. The task list
+(`kit plan`, `kit done`) and the unattended run (`kit run`) use
+[agent-runner](https://github.com/FIZL0/agent-runner), a stdlib-only package; install it for the same
+Python `kit` picks (`py -3` first, see above):
+
+```powershell
+py -3 -m pip install --user git+https://github.com/FIZL0/agent-runner@v0.5.0
+```
+
+`uv tool install` and `pipx` put it in an isolated environment the kit cannot import from, so they do not
+work here.
 
 Two optional packages, each needed by exactly one feature:
 

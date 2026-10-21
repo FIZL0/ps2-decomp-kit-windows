@@ -6,7 +6,7 @@ Grouped the way the work actually goes:
   get the code  extract · elf · ghidra · fn · xref · dis · data
   watch it run  pcsx2 · pine · pad · shot · probe · record · state
   prove it      oracle · check · audit
-  keep going    plan · journal · done · run
+  keep going    plan · journal · done · run · stop
 
 Design rule: every command prints something short and useful on success and one actionable line on
 failure. Nothing here ever dumps a megabyte into an agent's context — that is what the `--limit`,
@@ -49,6 +49,7 @@ CMDS = {
     'journal': ('ps2kit.journal', 'cmd_journal', 'start or finish a journal entry for a task'),
     'done':    ('ps2kit.checks', 'cmd_done', 'test + tick + commit a finished task in one call'),
     'run':     ('ps2kit.runner', 'cmd_run', 'unattended: keep agents working through the task list'),
+    'stop':    ('ps2kit.runner', 'cmd_stop', 'end a run gently: running tasks finish and merge, nothing new starts'),
 }
 
 ALIASES = {'f': 'fn', 'x': 'xref', 'p': 'plan', 'c': 'check', 'ss': 'shot', 'r': 'record'}
@@ -60,7 +61,7 @@ def usage() -> str:
               ('get the code', ['extract', 'elf', 'ghidra', 'fn', 'xref', 'dis', 'data']),
               ('watch it run', ['pcsx2', 'pine', 'pad', 'shot', 'probe', 'record', 'state']),
               ('prove it', ['oracle', 'check', 'audit']),
-              ('keep going', ['plan', 'journal', 'done', 'run'])]
+              ('keep going', ['plan', 'journal', 'done', 'run', 'stop'])]
     out = ['ps2-decomp-kit — decompile and re-implement a PlayStation 2 game, with proof.', '',
            'usage: kit <command> [args]    ·    kit <command> --help', '']
     for title, names in groups:
@@ -72,6 +73,9 @@ def usage() -> str:
             'No disc yet?      kit demo --check   then   docs/EXAMPLE.md',
             'Docs: README.md, SETUP.md, WINDOWS.md (what is different on Windows), docs/WORKFLOW.md']
     return '\n'.join(out)
+
+
+INSTALL = 'py -3 -m pip install --user git+https://github.com/FIZL0/agent-runner@v0.5.0'
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,10 +97,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         module = importlib.import_module(mod)
     except ImportError as e:
-        print(f'kit {name}: {e}\nMissing a Python package? See SETUP.md step 2.', file=sys.stderr)
+        print(f'kit {name}: {e}\nMissing a Python package? See SETUP.md step 1.', file=sys.stderr)
         return 2
     try:
         rc = getattr(module, fn)(argv[1:])
+    except ModuleNotFoundError as e:
+        if e.name != 'agent_runner':
+            raise
+        print(f'kit {name} needs agent-runner: {INSTALL} (SETUP.md step 1)', file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         print('\ninterrupted', file=sys.stderr)
         return 130

@@ -1,0 +1,29 @@
+# The kit's settings for agent-runner (https://github.com/FIZL0/agent-runner), the loop behind `kit run`.
+# ps2kit/runner.py adds what kit.toml decides (plan and journal dirs, context/, the oracle file, [git], [run]
+# fix_*), then a kit.toml `[agent-runner]` table on top, and writes the result to <context>/notes/agent-runner.toml.
+# `{kit}` is this interpreter running the checkout's `kit` script, quoted for the shell agent-runner uses
+# (cmd.exe on Windows); text the agents read says `kit`.
+
+[plan]
+brief_extra = "{kit} plan phase {id}"
+
+[run]
+command = "kit"
+test = "{kit} check"
+rules = "AGENT.md"
+untested = ["*.md", ".github/*"]
+slot_env = ["KIT_PCSX2={n}", "KIT_RUN=1"]
+pass_env = ["KIT_CONFIG", "KIT_CHECK_SLOTS", "AGENT_RUNNER_IDLE_BG"]
+on_exit = "{kit} pcsx2 stop"
+not_attempt = "^{id} spec:"
+suspect = "BLOCKED:.*(pcsx2|pine|capture|record|screenshot|save state|unattended)"
+prompt_extra = """
+You have your own emulator copy: KIT_PCSX2={n} is set, so `kit pcsx2 start`, `kit pine`, `kit pad` and \
+`kit shot` all talk to copy {n} and nobody else's. Run anything that drives the game in more than one step \
+as a single job under `kit pcsx2 with -- <cmd>` so it holds the emulator for the whole job; keep each one \
+short. Close your copy when you are done with it: `kit pcsx2 stop` (never kill the process by name — the \
+other slots' copies are running too). On a usage limit, leave the emulator running.
+
+Also read docs/. Tests only through `kit check` (one line when they pass; it says plainly whether the build \
+broke or a test failed). Read decompilation with `kit fn` / `kit xref`, never whole files.
+"""

@@ -33,7 +33,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ps2kit import platform_ as plat  # noqa: E402
 from ps2kit import pad  # noqa: E402
-from ps2kit import runner  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILED: list[str] = []
@@ -342,91 +341,6 @@ def test_pad_buttons():
     check(s._ms('2f') > 30, 'a frame count is milliseconds, not frames, by the time it is slept on')
 
 
-# --- the unattended runner ----------------------------------------------------
-
-def test_mux_choice():
-    print('runner: which multiplexer a run gets')
-    eq(runner.mux_choice(3, False, True, False, False), 'tmux', 'POSIX with tmux: panes')
-    eq(runner.mux_choice(3, False, False, False, False), 'sequential', 'POSIX without tmux: one session')
-    eq(runner.mux_choice(3, False, True, True, True), 'wt', 'Windows with wt.exe: tabs')
-    eq(runner.mux_choice(3, False, False, False, True), 'console', 'Windows without it: a console per slot')
-    eq(runner.mux_choice(1, False, True, True, True), 'sequential', 'one slot never needs a multiplexer')
-    eq(runner.mux_choice('once', False, True, True, True), 'sequential', '`once` is one session')
-    eq(runner.mux_choice(5, True, True, True, True), 'sequential', '--no-tmux is honoured on both')
-    eq(runner.slots_arg('once'), 'once', '`kit run once` parses')
-    eq(runner.slots_arg('4'), 4, 'and so does a count')
-
-
-def test_runner_windows_launch():
-    print('runner: the Windows slot launch')
-    job = Path(tempfile.gettempdir()) / 'ps2kit-test.job'
-    argv = runner.wt_argv(2, Path(r'C:\kit\s2'), job)
-    eq(argv[:6], ['wt.exe', '-w', 'kit', 'new-tab', '--title', 's2'],
-       'one named window, one titled tab per slot')
-    check('-d' in argv and argv[argv.index('-d') + 1] == r'C:\kit\s2',
-          'the tab opens in the slot worktree', str(argv))
-    eq(argv[-2:], ['--slot-shim', str(job)], 'the tab runs the shim on the job file')
-    eq(argv[-3], str(Path(runner.__file__).resolve()), 'which is this module')
-    eq(argv[-4], sys.executable, 'through this interpreter, named by path')
-
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp)
-        marker = d / 'slot9.live'
-        spec = {'argv': [sys.executable, '-c', 'import time; time.sleep(30)'], 'env': {'KIT_PCSX2': '9'},
-                'cwd': str(d), 'marker': str(marker)}
-        (d / 'job').write_text(json.dumps(spec), encoding='utf-8')
-        shim = subprocess.Popen([sys.executable, str(ROOT / 'ps2kit' / 'runner.py'),
-                                 '--slot-shim', str(d / 'job')])
-        pid = 0
-        try:
-            for _ in range(100):
-                if marker.exists():
-                    break
-                time.sleep(0.05)
-            check(marker.exists(), 'the shim publishes a marker file the loop can poll')
-            pid = int(marker.read_text().strip())
-            check(plat.alive(pid), 'the marker holds the pid of the session itself, not of a wrapper')
-            check(pid != shim.pid, 'which is a child of the shim, so its own children mean "running a tool"')
-            check(pid in plat.children(shim.pid), 'and children() finds it', f'{pid} {plat.children(shim.pid)}')
-            os.kill(pid, signal.SIGTERM)       # the session ends: the shim must clean up after it
-            check(shim.wait(timeout=20) != 0, 'the shim waits for the session, then ends too')
-        finally:
-            if shim.poll() is None:
-                shim.kill()
-                shim.wait()
-            if pid and plat.alive(pid):
-                os.kill(pid, signal.SIGKILL)
-        check(not marker.exists(), 'and removes the marker when the session is over')
-        mux = runner.WtMux()
-        eq(mux.pid(marker), 0, 'a vanished marker reads as no pid rather than raising')
-        check(not mux.alive(marker), 'and as a session that is over')
-
-        spec = {'argv': [sys.executable, '-c', 'raise SystemExit(7)'], 'env': {}, 'cwd': str(d),
-                'marker': str(d / 'slot8.live')}
-        (d / 'job8').write_text(json.dumps(spec), encoding='utf-8')
-        r = subprocess.run([sys.executable, str(ROOT / 'ps2kit' / 'runner.py'),
-                            '--slot-shim', str(d / 'job8')])
-        eq(r.returncode, 7, "the shim's exit code is the session's own")
-        check(not (d / 'slot8.live').exists(), 'and the marker is gone whatever the session did')
-
-
-def test_agent_argv():
-    print('runner: the agent command is a list, so no shell has to be guessed')
-    argv = runner.agent_argv('do the thing', 'sid-1', 'opus', 90)
-    check(isinstance(argv, list) and all(isinstance(a, str) for a in argv), 'argv is a list of strings')
-    eq(argv[1], 'do the thing', 'the prompt is one argument, whatever is in it')
-    i = argv.index('--settings')
-    hooks = json.loads(argv[i + 1])['hooks']
-    cmd = hooks['Stop'][0]['hooks'][0]['command']
-    check('--stop-hook' in cmd and '--idle 90' in cmd, 'the Stop hook arms the idle timer', cmd)
-    check('runner.py' in cmd, 'and points at this module', cmd)
-    with as_windows():
-        cmd = json.loads(runner.agent_argv('p', 's', 'opus', 5)[
-            runner.agent_argv('p', 's', 'opus', 5).index('--settings') + 1])
-        c = cmd['hooks']['Stop'][0]['hooks'][0]['command']
-        check(sys.executable in c, 'on Windows the hook names the interpreter by path', c)
-
-
 # --- nothing POSIX got broken -------------------------------------------------
 
 def test_modules_import():
@@ -451,8 +365,7 @@ def test_modules_import():
 def main() -> int:
     for t in (test_dirs, test_search_dirs, test_pine_endpoint, test_instances, test_pad_ini_rows,
               test_quote_args, test_tasklist_pids, test_lock, test_link, test_png_bytes, test_window_pick,
-              test_pad_transport, test_pad_buttons, test_mux_choice, test_runner_windows_launch,
-              test_agent_argv, test_modules_import):
+              test_pad_transport, test_pad_buttons, test_modules_import):
         t()
     print()
     if FAILED:

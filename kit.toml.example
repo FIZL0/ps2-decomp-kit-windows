@@ -66,14 +66,17 @@ push_merge = true
 
 [run]
 # A merge conflict `kit run` cannot join mechanically (anything that is not a file of one record
-# per line) goes to a Claude session of its own in the main checkout, which reads both sides and
-# finishes the merge; the run then tests and pushes it as usual. One session per merge, so the
-# twentieth costs what the first did. `false` leaves those merges for a human instead, which is what
-# happens anyway when the session cannot resolve one honestly.
+# per line) goes to an agent session in the main checkout, which resolves it; the run then tests and
+# pushes it as usual. `false` leaves those merges for a human.
 fix_merges = true
 fix_timeout = 1200          # seconds one of those may take before the merge is left for a human
 fix_model   = ""            # empty: the model the run's agents use
 
+# `kit run` and `kit plan` are agent-runner (https://github.com/FIZL0/agent-runner); the kit's
+# settings for it are in ps2kit/runner.toml. Any of its keys can be overridden here, table by table:
+# [agent-runner.run]
+# slots = 4
+# weekly_max = 80
 
 [paths]
 context = "context"           # private, git-ignored: disc files, dumps, captures, RAM images

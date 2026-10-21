@@ -35,8 +35,7 @@ Two rules that cost real time when broken:
 
 - **One PCSX2 per agent.** `$env:KIT_PCSX2 = N` selects copy N and every kit tool follows it — config
   directory (`-cfgpath`), PINE port (`pine_slot + N`), pad pipe, lock. `kit run` sets it per slot; set it
-  per terminal tab, not in your profile. Two agents on one copy will load states into each other's game
-  and both will conclude the game is haunted.
+  per terminal tab, not in your profile. Two agents on one copy load states into each other's game.
 - **Never kill PCSX2 by image name.** `taskkill /IM pcsx2-qt.exe` takes out the other agents' copies and
   the user's own session; a `/FI "WINDOWTITLE eq …"` filter can take out the console that ran it (see the
   comment in `ps2kit/hooks/guard.py`). `kit pcsx2 stop` ends yours. If you really need a pid,
@@ -95,13 +94,14 @@ task.
 ## Running a long session unattended
 
 `kit run` keeps N agents going through `plan/TODO.md` (see `docs/WORKFLOW.md` → *Long and unattended
-runs*, and the module docstring in `ps2kit/runner.py` for the picking rules). What matters when reading the
-results in the morning:
+runs*, and [agent-runner](https://github.com/FIZL0/agent-runner)'s README for the picking rules). What
+matters when reading the results:
 
 - Each task got **one** attempt. A task that comes back blocked has a reason on its line.
 - A session that only hit the usage limit was discarded, not counted — its task is still open.
-- A branch that could not be merged is still there as `task/<ID>`, with the reason in `context/notes/run.log`.
-- `context\notes\slotN.log` is slot N's session output; `kit plan` shows what landed.
+- A branch that could not be merged is still there as `task/<ID>`, with the reason in `context/notes/run.log` and `context/notes/ledger.md`.
+- `context\notes\slotN.log` has slot N's header lines (Windows captures no console output; the session's
+  transcript is Claude Code's own); `kit plan` shows what landed.
 - Each slot gets a Windows Terminal tab if `wt.exe` is installed, its own console window if not, and the
   run falls back to one sequential session if neither is available. Closing the window ends the sessions
   in it.

@@ -4,6 +4,8 @@
     kit oracle add angle 0x1004c0              give an address a name (that is the documentation)
     kit oracle angle --floats 1.5,-2            call it and print what came back
     kit oracle tick --ints 0x1f4a20 --ram 3     …over a RAM image saved from a save state
+    kit oracle join UNION OUT                   a merge's joined addresses file: drop repeated lines,
+                                                  exit 1 if both sides gave one name two addresses
 
 The work is done by `crates/kit-oracle` on our `ps2-oracle` library: a small R5900 interpreter that
 loads the boot ELF and the overlays straight off the disc and runs one function to its `jr $ra`. It is for *looking* — a few calls
@@ -149,11 +151,35 @@ def cmd_call(args) -> int:
         return 130
 
 
+def join(text: str, where: str) -> str | None:
+    """Both sides of a merge of the addresses file, as one: each line once. None (and why, on stderr) when
+    a line does not parse or one name got two different addresses, which a human has to pick between."""
+    try:
+        rows = parse(text, where)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return None
+    at = {}
+    for name, prog, addr, _ in rows:
+        if at.setdefault((name, prog), addr) != addr:
+            print(f'{where}: both sides name {name}{f" in {prog}" if prog else ""} and disagree about its '
+                  f'address ({at[(name, prog)]:#x} / {addr:#x})', file=sys.stderr)
+            return None
+    kept, seen = [], set()
+    for line in text.split('\n'):
+        entry = ' '.join(line.partition('#')[0].split())
+        if entry and entry in seen:
+            continue
+        seen.add(entry)
+        kept.append(line)
+    return '\n'.join(kept)
+
+
 def cmd_oracle(argv: list[str]) -> int:
     from ps2kit.cli import parser
     p = parser('oracle', __doc__)
-    p.add_argument('what', nargs='?', help='a name from the addresses file, an address, or list/add')
-    p.add_argument('rest', nargs='*', help='for `add`: the name and address')
+    p.add_argument('what', nargs='?', help='a name from the addresses file, an address, or list/add/join')
+    p.add_argument('rest', nargs='*', help='for `add`: the name and address; for `join`: UNION OUT')
     p.add_argument('--ints', help='integer arguments, comma separated (a0, a1, …); 0x… allowed')
     p.add_argument('--floats', help='float arguments, comma separated ($f12, $f13, …)')
     p.add_argument('--ram', metavar='FILE|SLOT',
@@ -167,6 +193,14 @@ def cmd_oracle(argv: list[str]) -> int:
         return cmd_list() if a.what else (p.print_help() or 0)
     if a.what == 'add':
         return cmd_add(a.rest)
+    if a.what == 'join':
+        if len(a.rest) != 2:
+            p.error('join takes UNION OUT')
+        text = join(Path(a.rest[0]).read_text(encoding='utf-8'), 'the addresses file')
+        if text is None:
+            return 1
+        Path(a.rest[1]).write_text(text, encoding='utf-8')
+        return 0
     if a.rest:
         print(f'unexpected argument {a.rest[0]!r} — arguments go in --ints / --floats', file=sys.stderr)
         return 2

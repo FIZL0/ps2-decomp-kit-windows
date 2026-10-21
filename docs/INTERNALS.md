@@ -10,8 +10,8 @@ modules that only talk to each other through the interfaces below.
    moment its `kit.toml` is filled in.
 2. **Nothing OS-specific outside `ps2kit/platform_.py`.** Paths, locks, process checks, screenshots, the PINE
    socket type and the pad backend all come from there. This is what makes this edition possible: it *is*
-   the Linux kit with that one module rewritten (plus the pad's transport, the launcher, and `runner.py`'s
-   choice of terminal multiplexer). `platform_.py` here still carries both branches — `plat.WINDOWS`,
+   the Linux kit with that one module rewritten (plus the pad's transport and the launcher; the
+   unattended run's terminals are agent-runner's). `platform_.py` here still carries both branches — `plat.WINDOWS`,
    `plat.LINUX`, `plat.MAC` — so a fix made in one edition can be read across into the other. If you find
    yourself writing `if plat.WINDOWS` in any other module, the function belongs in `platform_.py`
    instead; `tests/test_platform_win.py` asserts that for `emu.py`.
@@ -35,10 +35,10 @@ modules that only talk to each other through the interfaces below.
 | `probe.py` | finding things | `find_vsync()`, `find_changed()`, `chase()`, `cmd_probe(argv)` |
 | `record.py` | captures | `Watch` (a spec), `record()`, `cmd_record(argv)` |
 | `oracle.py` | the Rust oracle | `cmd_oracle(argv)` |
-| `plan.py` | the task list | `main(argv)` plus the functions `next_task/brief/tick/block/add/move/note` |
+| `plan.py` | the task list (agent-runner's plan) | `main(argv)`, `tick/block`, `phase(tid)`, `cleanroom()` |
 | `journal.py` | notes | `cmd_journal(argv)` |
 | `checks.py` | tests, commits | `cmd_check(argv)`, `cmd_done(argv)` |
-| `runner.py` | unattended runs | `cmd_run(argv)` |
+| `runner.py` + `runner.toml` | unattended runs (agent-runner) | `cmd_run/cmd_stop(argv)`, `settings()`, `use()` |
 | `setup.py` | first-time setup | `main(argv)`, `doctor(argv)`, `symbols(argv)` |
 
 Every `cmd_*(argv)` takes the argument list after the subcommand, parses it with
@@ -89,7 +89,9 @@ no `kit.toml` present.
 ## Dependencies
 
 The kit runs on a stock Python 3.11+ with no packages at all for everything static (disc, ELF,
-decompilation, plan, journal, checks). Optional extras, each needed by exactly one thing:
+decompilation, journal, checks). The task list and the unattended run need
+[agent-runner](https://github.com/FIZL0/agent-runner) v0.5.0 (stdlib only; SETUP.md step 1). Optional
+extras, each needed by exactly one thing:
 
 | Package | Needed for |
 |---|---|
@@ -108,12 +110,12 @@ and no `kit.toml`.
 
 | Script | Covers |
 |---|---|
-| `py -3 tests\test_plan.py` | the task list, the runner's task picker, and which merge conflicts it resolves itself |
+| `py -3 tests\test_plan.py` | the kit's settings for agent-runner, the spec/port phase, the oracle join, the journal, the guard |
 | `py -3 tests\test_static.py` | the static layer against inputs it builds itself: a disc image, a MIPS blob, a Ghidra dump |
 | `py -3 tests\test_live.py` | the live layer against a fake emulator it builds itself: PINE framing, the pad language, RAM search, launch |
 | `py -3 tests\test_record.py` | the watch-spec parser, region coalescing, torn-frame handling |
 | `py -3 tests\test_push.py` | the push step: the shared branch never pushed, a moved remote merged in, a conflicting one refused |
-| `py -3 tests\test_platform_win.py` | this edition's OS layer: paths, the lock, the PINE endpoint, `-cfgpath` copies, pad rows, process handling, `wt.exe` argv and its shim end to end |
+| `py -3 tests\test_platform_win.py` | this edition's OS layer: paths, the lock, the PINE endpoint, `-cfgpath` copies, pad rows, process handling |
 | `py -3 ps2kit\hooks\guard.py --self-test` | the context guard's decisions |
 | `cargo test --workspace` | the oracle's kit layer (`kit-oracle`) and your own port; `ps2-float` and `ps2-oracle` are tested in their own repositories |
 

@@ -23,7 +23,7 @@ Read this page before you trust anything live. The last section is the honest pa
 | screenshots | `grim` / `xdotool` / `spectacle` | `PrintWindow`, then a PowerShell screen copy, then PCSX2's own hotkey |
 | stopping a process | `SIGTERM` | `WM_CLOSE` to its window, else Ctrl+Break, else `TerminateProcess` |
 | finding a process | `/proc` | `CreateToolhelp32Snapshot`, with `tasklist` as a fallback |
-| unattended runs | tmux panes | Windows Terminal (`wt.exe`) tabs, else one console window per agent |
+| unattended runs | tmux panes | Windows Terminal (`wt.exe`) tabs, else one console window per agent (both editions run [agent-runner](https://github.com/FIZL0/agent-runner)) |
 | shell idioms | `head`, `tail`, `grep` | `Select-Object -First/-Last`, `Select-String` (`docs/CONTEXT.md`) |
 | Ghidra's Java | usually the distribution's | a JDK 21+ you install first (`winget install Microsoft.OpenJDK.21`) |
 | headless Ghidra | `support/analyzeHeadless` | `support\analyzeHeadless.bat` |
@@ -99,12 +99,9 @@ are the first to run it, write what happened in a journal entry — including th
 - **The Win32 screenshot.** `PrintWindow(PW_RENDERFULLCONTENT)` against a hardware-rendered,
   possibly-occluded PCSX2 window: whether it returns pixels at all, and whether the blank-grab retry and
   the two fallbacks behave as described.
-- **`wt.exe` tab launching** and the one-console-per-agent fallback, for `kit run`. `wt.exe` is a client
-  that asks the running terminal to open the tab and then exits, so the agent inherits the terminal's
-  environment rather than the kit's, and the slot's pid comes back through a shim instead of from the
-  process the kit started. Both of those are the kind of thing that works or does not.
+- **`kit run`.** See *Not yet verified on Windows: `kit run` on agent-runner* below.
 - **The launchers.** The interpreter search in `kit.cmd` and `kit.ps1`, and whether `kit` resolves for a
-  session the kit did not start itself (see the `wt.exe` point above).
+  session the kit did not start itself.
 - **Process handling.** The toolhelp snapshot, `WM_CLOSE` shutting PCSX2 down cleanly, Ctrl+Break
   reaching a console agent, and the `msvcrt` lock being released when a crashed recorder dies.
 - **Long runs as a whole.** Worktrees, build-directory caps, merging, and the hooks, over hours rather
@@ -131,6 +128,27 @@ current directory, so it is `.\kit <command>` from the repository until you add 
 your `PATH`; these pages write the short form. And if PowerShell refuses to run `kit.ps1` at all, that is
 the execution policy rather than the kit:
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `kit.cmd`, which has no policy to satisfy.
+
+## Not yet verified on Windows: `kit run` on agent-runner
+
+`kit run`, `kit stop` and `kit plan` run [agent-runner](https://github.com/FIZL0/agent-runner) (v0.5.0).
+Its Windows code and the kit's settings for it are tested on Linux with the platform switched; none of the
+following has been run on Windows yet:
+
+- agent-runner installed for the interpreter `kit.cmd` picks (`py -3` versus `python`), and `kit run`
+  finding it.
+- One `wt.exe` tab per slot in the `agents` window, the console-window fallback, the slot shim's marker
+  file, and `claude.cmd` found on `PATH`.
+- The idle Stop hook ending a session under Git Bash, and the usage-limit check from the transcript.
+- The commands agent-runner runs through `cmd.exe`: the test gate (`<python> kit check`), the slot's
+  `kit pcsx2 stop` when its session ends, the brief's `kit plan phase`, and `kit oracle join` on a merge,
+  each with an interpreter path that may contain spaces.
+- Ending a session: `WM_CLOSE` to PCSX2's window in the session's process tree, up to 10 s for it to
+  save and exit, then `taskkill /T /F`.
+- Agents typing `kit …` in their Git Bash shell (the prompt says `kit`).
+- The run lock (`msvcrt`), worktree links as junctions or hard links, and plan paths with forward slashes
+  in `git show` and the merge join.
+- A long run end to end: merges, the test gate on a merge, the merge-fixing session, pushes, `kit stop`.
 
 If one of these turns out to be wrong, fix the code, and fix the line here that promised it. A list of
 untested claims is only useful while it is current.
