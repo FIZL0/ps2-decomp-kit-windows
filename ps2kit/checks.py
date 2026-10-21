@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,8 @@ FAIL_LINE = re.compile(r'^(?:\s*---- .+ ----|thread .+ panicked|panicked at|asse
                        r'\s*(?:FAILED|FAIL|ERROR|E)\b.*|.*\bAssertionError\b.*|.*\bassert\b.*|'
                        r'test .+ \.\.\. FAILED|.*Test #\d+: .+Failed.*|\s*--- FAIL:.*|'
                        r'left:.*|right:.*|\s+at .+:\d+|.*\.rs:\d+:\d+:.*|.*\.py:\d+:.*)$')
+# cargo's own "a test binary failed" lines start `error:` like a compile error, but the build was fine.
+CARGO_TEST_FAILED = re.compile(r'^error: (test failed, to rerun pass|\d+ targets failed:)')
 
 
 # --- the concurrency gate ------------------------------------------------------
@@ -197,14 +200,17 @@ def summarise(rc: int, log: Path, what: str = 'TESTS') -> list[str]:
     if rc == 0:
         n = _passed_count(text)
         return [f'{what} PASSED: {n} tests' if n else f'{what} PASSED']
-    errs = [l for l in text.splitlines() if cfg(False).build_error_re.search(l)]
+    errs = [l for l in text.splitlines() if cfg(False).build_error_re.search(l) and not CARGO_TEST_FAILED.match(l)]
     if errs:
         # A build failure means "you broke the code you just wrote" — a completely different next move from a
         # failing test, so it gets its own unmissable headline and the test output is not shown at all.
         return [f'BUILD FAILED (treat this as a build failure, no tests ran):', *_cap(errs),
                 f'(full log: {_rel(log)})']
     body = _failures(text)
-    return [f'{what} FAILED (this is a test result, the build is fine):', *_cap(body), f'(full log: {_rel(log)})']
+    # which test binary failed, as cargo says it: `kit run` reads it to rerun that one alone
+    rerun = [l for l in text.splitlines() if CARGO_TEST_FAILED.match(l)]
+    return [f'{what} FAILED (this is a test result, the build is fine):', *_cap(body), *rerun[:4],
+            f'(full log: {_rel(log)})']
 
 
 def _failures(text: str) -> list[str]:
@@ -242,8 +248,11 @@ def cmd_check(argv: list[str]) -> int:
     ap.add_argument('extra', nargs='*', metavar='ARG',
                     help='passed through to [build] test, e.g. kit check -p sim --test flights')
     ap.add_argument('--no-gate', action='store_true', help='skip the concurrency gate (one-off, interactive)')
+    ap.add_argument('--rerun', action='append', default=[], metavar='ARGS',
+                    help="one failed test binary as the summary's \"to rerun pass\" line gives it, one quoted "
+                         "string (the run's retest of a load flake); repeatable")
     a, unknown = ap.parse_known_args(argv)
-    extra = a.extra + unknown
+    extra = a.extra + unknown + [w for r in a.rerun for w in shlex.split(r)]
 
     c = cfg(False)
     if not c.test_cmd:

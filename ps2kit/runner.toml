@@ -12,6 +12,10 @@ command = "kit"
 test = "{kit} check"
 rules = "AGENT.md"
 untested = ["*.md", ".github/*"]
+# A post-merge failure is rerun alone before it parks the branch: the netplay/lobby/udp kind of test times out
+# or loses its port under the other slots' load and passes alone. Each name is cargo's "to rerun pass" args.
+failures = 'to rerun pass `([^`]+)`'
+retest = "{kit} check --rerun {names}"
 slot_env = ["KIT_PCSX2={n}", "KIT_RUN=1"]
 pass_env = ["KIT_CONFIG", "KIT_CHECK_SLOTS", "AGENT_RUNNER_IDLE_BG"]
 on_exit = "{kit} pcsx2 stop"
