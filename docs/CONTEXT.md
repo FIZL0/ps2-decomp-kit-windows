@@ -158,7 +158,7 @@ holds prose and numbers, not artefacts.
 
 ## Stop rather than loop
 
-"If you get stuck, move on" (`AGENT.md`) is a context measure as much as a morale one. Twenty minutes of
+"Stuck? Move on." (`AGENT.md`) is a context measure as much as a morale one. Twenty minutes of
 retrying one obstacle is both no progress and a transcript full of failed attempts that every later turn
 re-reads. Writing down what was tried, blocking the task with a reason and taking the next one keeps both
 the project and the session moving.

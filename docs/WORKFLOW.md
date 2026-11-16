@@ -18,7 +18,7 @@ kit plan brief T12
 
 `brief` gives you the task's line, its own plan file, its journal directory and the files it names — the
 same starting context every time, in one call. Read that, then the files it points at. Resist going
-further afield; the code map in `PLAN.md` exists so you never have to search.
+further afield; the code map in `plan/CODEMAP.md` exists so you never have to search.
 
 ---
 

@@ -5,6 +5,9 @@
 # (cmd.exe on Windows); text the agents read says `kit`.
 
 [plan]
+# Files `plan "<heading>"` also searches (after TODO, REFERENCE, HUMAN, DONE and AGENT.md): the
+# on-demand half of the agent instructions.
+lookup = ["PLAN.md", "plan/CODEMAP.md", "plan/MECHANICS.md"]
 brief_extra = "{kit} plan phase {id}"
 
 [run]

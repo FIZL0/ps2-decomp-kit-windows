@@ -414,7 +414,7 @@ def test_runner_config():
               'and the kit settings the runner was started with', str(r['pass_env']))
         eq(r['links'], ['ctx', '*.iso', 'game/x.iso'], 'context and the disc are linked into every worktree')
         eq(r['notes'], 'ctx/notes', 'the runner logs into context/notes')
-        eq(s['plan'], {'brief_extra': f'{kit} plan phase {{id}}', 'dir': 'plan', 'journal': 'notes/j'},
+        eq(s['plan'], {'lookup': ['PLAN.md', 'plan/CODEMAP.md', 'plan/MECHANICS.md'], 'brief_extra': f'{kit} plan phase {{id}}', 'dir': 'plan', 'journal': 'notes/j'},
            'plan and journal come from kit.toml, and every brief ends with the phase')
         eq(r['joinable'], ['plan/*.md', 'notes/j/*.md', 'research/oracle.txt'], 'joinable: plan, journal, oracle')
         eq(r['join'], {'research/oracle.txt': f'{kit} oracle join {{union}} {{out}}'}, 'the oracle file joins via kit')

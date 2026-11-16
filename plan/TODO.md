@@ -1,6 +1,6 @@
 # TODO — open tasks, in order
 
-The rules are in `PLAN.md`; this is only the backlog. Read it with `kit plan` (headings and ids),
+The rules are in `AGENT.md` (mechanics: `PLAN.md`); this is only the backlog. Read it with `kit plan` (headings and ids),
 `kit plan next` (the next task to take) and `kit plan brief <ID>` (everything you need for one task:
 the line, its long form, its journal and the files, with line counts and recent commits). Never open this
 file whole, and never edit a checkbox by hand — `kit plan tick <ID>`, `kit plan block <ID> "<why>"`,

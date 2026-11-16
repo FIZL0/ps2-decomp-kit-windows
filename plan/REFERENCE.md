@@ -31,7 +31,17 @@ config, their own PINE slot and their own lock:
     kit shot out.png           screenshot of the emulator window
     kit record …               a per-frame capture to CSV (see `docs/PCSX2.md`)
 
-Two rules that cost real time when broken:
+The rules (`AGENT.md` *The live game* has them in one line each):
+
+- **One PINE connection at a time.** A second client while a recorder is polling hangs both. To read
+  static values during a capture, read them from a save state instead — cheap, and it does not disturb
+  the capture.
+- **Don't touch the emulator while a capture is running.**
+- **Never send `select`** on the virtual pad — PCSX2's hotkeys are Select plus a shoulder button.
+- `CAPTURE FAILED` from any tool means the output file is incomplete. Fix the cause and re-record; do not
+  use it.
+
+Two more that cost real time when broken:
 
 - **One PCSX2 per agent.** `$env:KIT_PCSX2 = N` selects copy N and every kit tool follows it — config
   directory (`-cfgpath`), PINE port (`pine_slot + N`), pad pipe, lock. `kit run` sets it per slot; set it
