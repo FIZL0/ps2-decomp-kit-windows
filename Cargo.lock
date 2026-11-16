@@ -20,13 +20,13 @@ dependencies = [
 
 [[package]]
 name = "ps2-float"
-version = "0.3.1"
-source = "git+https://github.com/FIZL0/ps2-float?tag=v0.3.1#530b6d23b06dbfd7115d3ee933ce82fa745865d3"
+version = "0.3.2"
+source = "git+https://github.com/FIZL0/ps2-float?tag=v0.3.2#d45a75da133714cf35e28ba448277ed3fd765896"
 
 [[package]]
 name = "ps2-oracle"
-version = "0.1.4"
-source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.4#f1460e8046092d9db6b5d40614199403fbfa9b05"
+version = "0.1.5"
+source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.5#7411d17b632131546153e381ff9b76b7d9b1e8b4"
 dependencies = [
  "ps2-float",
 ]
