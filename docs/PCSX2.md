@@ -180,7 +180,8 @@ Unattended runs want more than one emulator. `KIT_PCSX2=N` gives a process its o
 | lock | its own, so copy 1 and copy 2 never block each other |
 | pad | its own named pipe; bound in that copy's config by device index |
 
-A copy lives in `<repo>-slots\pcsx2\sN\PCSX2\`, a sibling of the repository rather than inside it, and
+A copy lives in `<runner home>\pcsx2\sN\PCSX2\` (`agent-runner home slots`, by default
+`~\runs\<repo>`), outside the repository, and
 its `[Folders]` keys are rewritten to absolute paths underneath itself — so a copy cannot overwrite your
 own save states or memory cards.
 

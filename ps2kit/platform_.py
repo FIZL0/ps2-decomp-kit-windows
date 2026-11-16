@@ -239,9 +239,20 @@ def pcsx2_config_dir(instance_n: str = '') -> Path:
 
 
 def copies_root() -> Path:
-    """Where kit-managed PCSX2 copies live: a sibling of the repo, never inside it."""
+    """Where kit-managed PCSX2 copies live: beside the runner's worktrees (`agent-runner home slots`, from
+    runner settings), never inside the repo or beside it in the repos folder."""
     from ps2kit.config import ROOT
-    return ROOT.parent / f'{ROOT.name}-slots' / 'pcsx2'
+    try:
+        out = subprocess.run(['agent-runner', 'home', 'slots'], cwd=ROOT, capture_output=True, text=True)
+    except FileNotFoundError:
+        out = None
+    if out is not None and not out.returncode and out.stdout.strip():
+        return Path(out.stdout.strip()) / 'pcsx2'
+    # no runner to ask: its default home, ~/runs/<main checkout's folder name>
+    out = subprocess.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], cwd=ROOT,
+                         capture_output=True, text=True)
+    main = Path(out.stdout.strip()).parent if not out.returncode and out.stdout.strip() else ROOT
+    return Path.home() / 'runs' / main.name / 'pcsx2'
 
 
 def pcsx2_guesses(windows: bool | None = None) -> tuple[str, ...]:

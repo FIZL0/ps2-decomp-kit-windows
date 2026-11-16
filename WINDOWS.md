@@ -90,7 +90,7 @@ are the first to run it, write what happened in a journal entry — including th
   launch, plus a copy's `[Folders]`, `[InputSources]` and `[Hotkeys]` rows — written against PCSX2's
   Linux ini format and assumed identical here.
 - **`-cfgpath` instances.** That PCSX2 accepts it, that it makes a copy wholly independent of your own
-  install, and that `<repo>-slots\pcsx2\sN\PCSX2\` is laid out the way a copy expects.
+  install, and that `~\runs\<repo>\pcsx2\sN\PCSX2\` is laid out the way a copy expects.
 - **The pad.** `vgamepad`, the ViGEmBus install, whether PCSX2's SDL source enumerates kit pads in
   creation order, and whether the pad-bound pause and screenshot hotkeys land. Also that turning XInput
   off is what stops PCSX2 seeing each pad twice.
