@@ -11,7 +11,7 @@ brief_extra = "{kit} plan phase {id}"
 command = "kit"
 test = "{kit} check"
 rules = "AGENT.md"
-untested = ["*.md", ".github/*"]
+untested = ["*.md", "LICENSE*", ".github/*"]
 # A post-merge failure is rerun alone before it parks the branch: the netplay/lobby/udp kind of test times out
 # or loses its port under the other slots' load and passes alone. Each name is cargo's "to rerun pass" args.
 failures = 'to rerun pass `([^`]+)`'

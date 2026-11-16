@@ -37,7 +37,7 @@ in step:
 | `kit plan tick T7` | done → moves it to `plan/DONE.md` |
 | `kit plan block T7 "<why + what unblocks it>"` | blocked, with the reason recorded |
 | `kit plan unblock T7 [note]` | un-blocked |
-| `kit plan add T "text" [@ where]` | a new task, next free ID in that prefix |
+| `kit plan add T "text" --files a.rs,dir/** [--after X] [--test name] [@ where]` | a new task, next free ID in that prefix; fields, never prose, say its files and what it waits on |
 | `kit plan move T7 top\|before T3\|after T3\|in <section>` | reprioritise |
 | `kit plan note T7 "<text>"` | add a line to its file |
 | `kit plan newid T` | the next free ID in a prefix |
