@@ -1,8 +1,7 @@
 """`kit run` and `kit stop`: the unattended loop is agent-runner (https://github.com/FIZL0/agent-runner).
 
     kit run once            one task, then stop (the way to try it the first time)
-    kit run                 3 agents, mode d (different files), a Windows Terminal tab each
-    kit run 5 --mode p      5 agents, strictly in plan/TODO.md order, files may overlap
+    kit run                 3 agents (never two on one file), a Windows Terminal tab each
     kit run --dry-run 2     what 2 slots would start now, and why the rest wait
     kit run --force         keep starting tasks past the weekly usage cap
     kit stop                the running tasks finish and merge, nothing new starts, the run exits
@@ -99,7 +98,7 @@ def use() -> Path:
 
 
 def _slots(argv: list[str], default: int) -> int:
-    takes = {'--mode', '--idle', '--stall', '--pause', '--model'}
+    takes = {'--idle', '--stall', '--pause', '--model'}
     it = iter(argv)
     for a in it:
         if a in takes:

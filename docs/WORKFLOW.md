@@ -183,8 +183,7 @@ sitting with fresh context, and that is deliberate.
 
 ```powershell
 kit run once                 # one task, then stop
-kit run 3                    # three at a time, each in its own git worktree (mode d: different files)
-kit run 3 --mode p           # ... strictly in TODO.md order, files may overlap
+kit run 3                    # three at a time, each in its own git worktree (never two on one file)
 kit run --dry-run 3          # what would start now, and why the rest wait
 kit stop                     # running tasks finish and merge, nothing new starts
 ```

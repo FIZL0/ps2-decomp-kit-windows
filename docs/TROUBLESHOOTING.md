@@ -234,7 +234,7 @@ Read its journal entry and `kit plan` — a blocked task is a result, with its r
 stopped for no recorded reason, that is a bug in the run, not in the task.
 
 **Two agents edited the same file**
-Pick tasks for different files: `kit run 3 --mode d`, which is the default. Worktrees make the conflict a
+The run never starts two tasks on one file. Worktrees make the conflict a
 merge rather than corruption, but it is still wasted work.
 
 **An agent is waiting on an interactive prompt**

@@ -437,7 +437,7 @@ def test_runner_config():
     finally:
         platform_.WINDOWS, sys.executable = saved
     eq(K._slots([], 3), 3, 'slots: the default')
-    eq(K._slots(['--mode', 'p', '5'], 3), 5, 'slots: after an option with a value')
+    eq(K._slots(['--idle', '60', '5'], 3), 5, 'slots: after an option with a value')
     eq(K._slots(['once'], 3), 1, 'slots: once is one')
 
 
