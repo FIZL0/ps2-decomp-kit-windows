@@ -11,6 +11,7 @@ lookup = ["PLAN.md", "plan/CODEMAP.md", "plan/MECHANICS.md"]
 brief_extra = "{kit} plan phase {id}"
 
 [run]
+auto_upgrade = true  # upgrade agent-runner by itself when a newer release is out, between merges
 command = "kit"
 test = "{kit} check"
 rules = "AGENT.md"
