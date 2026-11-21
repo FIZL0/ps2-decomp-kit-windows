@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import sys
 
 CMDS = {
@@ -87,6 +88,16 @@ def main(argv: list[str] | None = None) -> int:
         print('ps2-decomp-kit 1.0')
         return 0
     name = ALIASES.get(argv[0], argv[0])
+    if name not in CMDS and importlib.util.find_spec('agent_runner'):
+        # The rest is agent-runner's (since, status, control, upgrade, take, pause, slots…), with the kit's
+        # settings: its feed and control sessions type them as `kit <command>` ([run] command).
+        import os
+        from agent_runner import cli as ar
+        from ps2kit.config import ROOT
+        from ps2kit.runner import use
+        os.chdir(ROOT)
+        use()
+        return ar.main(argv)
     if name not in CMDS:
         near = [k for k in CMDS if k.startswith(name[:2])]
         print(f'kit: unknown command {argv[0]!r}' + (f' — did you mean: {", ".join(near)}?' if near else ''),
